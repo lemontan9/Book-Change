@@ -11,6 +11,8 @@ const STORAGE_KEYS = {
   USED_CODES: 'bookswap_used_codes_v1',
 };
 
+export const ACTIVE_SPREADSHEET_ID = '1ppG2ExLSTl5pb1TS47pW2aNvqMVID8qvXwrB3_uOSm0';
+
 export const INITIAL_SETTINGS: SystemSettings = {
   categories: [
     'หนังสือทั่วไป',
@@ -45,6 +47,7 @@ export const INITIAL_SETTINGS: SystemSettings = {
   ],
   showWelcomeShelf: true,
   deadStockThresholdDays: 30,
+  connectedSpreadsheetId: ACTIVE_SPREADSHEET_ID,
 };
 
 export const INITIAL_STAFF: StaffAccount[] = [
@@ -217,9 +220,16 @@ export class StorageService {
     }
     try {
       const parsed = JSON.parse(raw);
-      return {
+      const currentId = parsed.connectedSpreadsheetId?.trim();
+      const connectedSpreadsheetId =
+        !currentId || currentId.startsWith('172FuZL2')
+          ? ACTIVE_SPREADSHEET_ID
+          : currentId;
+
+      const merged: SystemSettings = {
         ...INITIAL_SETTINGS,
         ...parsed,
+        connectedSpreadsheetId,
         participationHistoryOptions:
           Array.isArray(parsed.participationHistoryOptions) && parsed.participationHistoryOptions.length > 0
             ? parsed.participationHistoryOptions
@@ -229,6 +239,11 @@ export class StorageService {
             ? parsed.visitFrequencyOptions
             : INITIAL_SETTINGS.visitFrequencyOptions,
       };
+
+      if (parsed.connectedSpreadsheetId !== connectedSpreadsheetId) {
+        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
+      }
+      return merged;
     } catch {
       return INITIAL_SETTINGS;
     }

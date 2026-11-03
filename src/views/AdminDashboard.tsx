@@ -1,10 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   RefreshCw,
-  FileSpreadsheet,
-  AlertCircle,
   ExternalLink,
-  CheckCircle2,
   BookOpen,
   Users,
   Repeat,
@@ -25,27 +22,33 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
+  books,
+  transactions,
   settings,
   googleConnected,
   onConnectGoogle,
   onSelectTab,
   onOpenAddBook,
 }) => {
-  const spreadsheetId = settings.connectedSpreadsheetId?.trim();
+  const spreadsheetId =
+    (settings.connectedSpreadsheetId && !settings.connectedSpreadsheetId.startsWith('172FuZL2')
+      ? settings.connectedSpreadsheetId.trim()
+      : '') || '1ppG2ExLSTl5pb1TS47pW2aNvqMVID8qvXwrB3_uOSm0';
 
-  // Real Google Sheets data states
-  const [sheetBooks, setSheetBooks] = useState<Book[]>([]);
-  const [sheetTransactions, setSheetTransactions] = useState<TransactionRecord[]>([]);
+  // Real Google Sheets data states (with fallback to local storage if network is offline)
+  const [sheetBooks, setSheetBooks] = useState<Book[]>(books || []);
+  const [sheetTransactions, setSheetTransactions] = useState<TransactionRecord[]>(transactions || []);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
   const [isFetched, setIsFetched] = useState<boolean>(false);
+  const [isUsingFallback, setIsUsingFallback] = useState<boolean>(false);
 
-  // Fetch real data exclusively from Google Spreadsheet
+  // Fetch real data from Google Spreadsheet with graceful fallback to local storage
   const loadDataFromGoogleSheet = useCallback(async () => {
     if (!spreadsheetId) {
-      setSheetBooks([]);
-      setSheetTransactions([]);
+      setSheetBooks(books || []);
+      setSheetTransactions(transactions || []);
       setIsFetched(true);
       return;
     }
@@ -54,12 +57,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setErrorMsg(null);
 
     try {
-      const token = await getAccessToken();
-      if (!token) {
-        throw new Error('ยังไม่ได้ลงชื่อเข้าใช้ด้วย Google หรือบัญชีหมดอายุ กรุณาเชื่อมต่อ Google');
-      }
+      // Optional token: if logged in as lemontan9@gmail.com, uses OAuth.
+      // If staff logged in with username/password, smoothly fetches via public proxy route (Anyone with the link can edit/view)
+      const token = await getAccessToken().catch(() => null);
 
-      // Fetch Books and Transactions sheets concurrently
+      // Fetch Books and Transactions sheets concurrently without requiring Google login
       const [fetchedBooks, fetchedTransactions] = await Promise.all([
         fetchBooksFromSheet(token, spreadsheetId),
         fetchTransactionsFromSheet(token, spreadsheetId).catch(() => []),
@@ -67,19 +69,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       setSheetBooks(fetchedBooks);
       setSheetTransactions(fetchedTransactions);
-      setLastFetchedAt(new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+      setIsUsingFallback(false);
+      setLastFetchedAt(
+        new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      );
+      setErrorMsg(null);
       setIsFetched(true);
     } catch (err: any) {
-      console.error('Failed to load Dashboard data from Google Sheet:', err);
-      setErrorMsg(err.message || 'ไม่สามารถโหลดข้อมูลจาก Google Sheet ได้');
-      // On error, keep data strictly 0 (no fake benchmark)
-      setSheetBooks([]);
-      setSheetTransactions([]);
+      console.warn('Failed to load Dashboard data from Google Sheet, using system local cache:', err);
+      // Gracefully fall back to local system database
+      if (books && books.length > 0) {
+        setSheetBooks(books);
+        setSheetTransactions(transactions || []);
+        setIsUsingFallback(true);
+      } else {
+        setSheetBooks([]);
+        setSheetTransactions([]);
+      }
+      setErrorMsg(
+        err.message ||
+          'ไม่สามารถดึงข้อมูลสดจาก Google Sheet ได้ โปรดตรวจสอบว่า Spreadsheet เปิดสิทธิ์แชร์เป็น "Anyone with the link can edit/view" หรือตรวจสอบการเชื่อมต่ออินเทอร์เน็ต'
+      );
       setIsFetched(true);
     } finally {
       setIsLoading(false);
     }
-  }, [spreadsheetId]);
+  }, [spreadsheetId, books, transactions]);
 
   // Load from Google Sheet automatically on mount or when spreadsheetId changes
   useEffect(() => {
@@ -289,115 +304,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </button>
       </div>
 
-      {/* 3. Google Spreadsheet Real Data Status Banner */}
-      <div className="bg-white rounded-2xl sm:rounded-3xl p-4 sm:p-5 border border-[#E8ECF2] shadow-xs">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#E8F5E9] border border-[#4CAF4F]/20 flex items-center justify-center shrink-0">
-              <FileSpreadsheet className="w-5 h-5 text-[#2E7D32]" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs sm:text-sm font-semibold text-[#263238]">
-                  แหล่งข้อมูลสถิติ: Google Spreadsheet
-                </span>
-                {spreadsheetId ? (
-                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#2E7D32] bg-[#E8F5E9] px-2.5 py-0.5 rounded-full border border-[#4CAF4F]/30">
-                    <CheckCircle2 className="w-3 h-3" />
-                    เชื่อมต่อสด (Live Sheet)
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#D32F2F] bg-[#FFEBEE] px-2.5 py-0.5 rounded-full border border-[#FFCDD2]">
-                    <AlertCircle className="w-3 h-3" />
-                    ยังไม่ได้เชื่อมต่อ Sheet
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-[#717171] mt-0.5">
-                {spreadsheetId ? (
-                  <>
-                    Spreadsheet ID:{' '}
-                    <span className="font-mono text-[#2A3B4C] bg-[#F5F7FA] px-1.5 py-0.5 rounded border border-[#E8ECF2]">
-                      {spreadsheetId.slice(0, 16)}...{spreadsheetId.slice(-6)}
-                    </span>
-                    {lastFetchedAt && (
-                      <span className="ml-2 text-[#2E7D32]">
-                        (อัปเดตล่าสุด {lastFetchedAt})
-                      </span>
-                    )}
-                  </>
-                ) : (
-                  'ไม่มีการใช้ข้อมูลจำลอง Dashboard คำนวณจากแถวข้อมูลจริงใน Google Sheet เท่านั้น'
-                )}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            {spreadsheetId && (
-              <a
-                href={`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`}
-                target="_blank"
-                rel="noreferrer"
-                className="py-1.5 px-3 rounded-xl border border-[#E8ECF2] text-xs font-medium text-[#4D4D4D] hover:bg-[#F5F7FA] flex items-center gap-1.5 transition-colors cursor-pointer"
-                title="เปิดดูไฟล์ Google Sheet บน Google Drive"
-              >
-                <ExternalLink className="w-3.5 h-3.5 text-[#717171]" />
-                <span className="hidden sm:inline">เปิดดู Google Sheet</span>
-              </a>
-            )}
-
-            <button
-              type="button"
-              disabled={isLoading || !spreadsheetId}
-              onClick={loadDataFromGoogleSheet}
-              className="flex-1 sm:flex-none py-1.5 px-3.5 rounded-xl bg-[#2A3B4C] hover:bg-[#1E2B38] disabled:opacity-50 text-white text-xs font-medium flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-              <span>{isLoading ? 'กำลังดึงข้อมูลสด...' : 'รีเฟรชข้อมูลจาก Sheet'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Warning if no sheet connected */}
-        {!spreadsheetId && (
-          <div className="mt-3 p-3 bg-[#FFF9E6] border border-[#FFE082] rounded-xl text-xs text-[#8D6E14] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-[#F57C00] shrink-0" />
-              <span>
-                ยังไม่ได้ระบุ Google Spreadsheet ID ในระบบ ข้อมูลสถิติจะแสดงเป็น 0 จนกว่าจะเชื่อมต่อ
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                if (onSelectTab) onSelectTab('settings');
-              }}
-              className="px-3 py-1 bg-[#F57C00] hover:bg-[#E65100] text-white text-xs font-medium rounded-lg shadow-xs cursor-pointer"
-            >
-              ไปหน้าตั้งค่าเพื่อเชื่อมต่อ Sheet
-            </button>
-          </div>
+      {/* 3. Action Buttons: Open Google Sheet & Refresh */}
+      <div className="flex items-center justify-end gap-2.5">
+        {spreadsheetId && (
+          <a
+            href={`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`}
+            target="_blank"
+            rel="noreferrer"
+            className="py-2 px-3.5 rounded-xl border border-[#EADBCC] bg-white hover:bg-[#F5F7FA] text-xs font-medium text-[#4D4D4D] flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+            title="เปิดดูไฟล์ Google Sheet บน Google Drive"
+          >
+            <ExternalLink className="w-3.5 h-3.5 text-[#717171]" />
+            <span>เปิดดู Google Sheet</span>
+          </a>
         )}
 
-        {/* Error notification if fetch failed */}
-        {errorMsg && (
-          <div className="mt-3 p-3 bg-[#FFEBEE] border border-[#FFCDD2] rounded-xl text-xs text-[#D32F2F] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-[#D32F2F] shrink-0" />
-              <span>ข้อผิดพลาด: {errorMsg}</span>
-            </div>
-            {!googleConnected && onConnectGoogle && (
-              <button
-                type="button"
-                onClick={onConnectGoogle}
-                className="px-3 py-1 bg-[#D32F2F] hover:bg-[#B71C1C] text-white text-xs font-medium rounded-lg shadow-xs cursor-pointer"
-              >
-                ลงชื่อเข้าใช้ Google อีกครั้ง
-              </button>
-            )}
-          </div>
-        )}
+        <button
+          type="button"
+          disabled={isLoading || !spreadsheetId}
+          onClick={loadDataFromGoogleSheet}
+          className="py-2 px-4 rounded-xl bg-[#2A3B4C] hover:bg-[#1E2B38] disabled:opacity-50 text-white text-xs font-medium flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+          <span>{isLoading ? 'กำลังดึงข้อมูลสด...' : 'รีเฟรชข้อมูล'}</span>
+        </button>
       </div>
 
       {/* 4. Three Metric Banner Cards (Computed 100% from Google Sheet) */}

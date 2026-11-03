@@ -244,7 +244,7 @@ export default function App() {
         onLoginSuccess={(user) => {
           setIsAdminLoggedIn(true);
           setAdminUsername(user);
-          setCurrentTab('books');
+          setCurrentTab('dashboard');
         }}
         onGoogleConnected={(user, token) => {
           setGoogleUser(user);

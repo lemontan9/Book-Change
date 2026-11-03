@@ -165,23 +165,173 @@ export async function appendTransactionToSheet(
   );
 }
 
-export async function fetchBooksFromSheet(
-  accessToken: string,
-  spreadsheetId: string
-): Promise<Book[]> {
-  const res = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:M2000`,
-    {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    }
-  );
+/**
+ * Robust CSV parser for Google Sheets gviz/tq export
+ */
+function parseCSV(text: string): string[][] {
+  const result: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuotes = false;
 
-  if (!res.ok) {
-    throw new Error('Failed to fetch books from Google Sheets');
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (nextChar === '"') {
+          cell += '"';
+          i++; // skip escaped quote
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === ',') {
+        row.push(cell.trim());
+        cell = '';
+      } else if (char === '\n' || char === '\r') {
+        if (char === '\r' && nextChar === '\n') {
+          i++; // skip \n
+        }
+        row.push(cell.trim());
+        if (row.some((c) => c.length > 0)) {
+          result.push(row);
+        }
+        row = [];
+        cell = '';
+      } else {
+        cell += char;
+      }
+    }
   }
 
-  const data = await res.json();
-  const rows: any[][] = data.values || [];
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell.trim());
+    if (row.some((c) => c.length > 0)) {
+      result.push(row);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Fetches public Google Spreadsheet data.
+ * First calls the server proxy endpoint (/api/sheet-data) which bypasses browser CORS.
+ * Falls back to direct client-side fetch if available.
+ */
+export async function fetchPublicSheetCSV(
+  spreadsheetId: string,
+  sheetName: string
+): Promise<string[][]> {
+  // 1. Try server-side proxy route first (no browser CORS restrictions)
+  try {
+    const proxyUrl = `/api/sheet-data?id=${encodeURIComponent(spreadsheetId)}&sheet=${encodeURIComponent(
+      sheetName
+    )}`;
+    const res = await fetch(proxyUrl);
+    if (res.ok) {
+      const text = await res.text();
+      if (text && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
+        const parsed = parseCSV(text);
+        if (parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } else {
+      const errJson = await res.json().catch(() => null);
+      if (errJson?.error) {
+        throw new Error(errJson.error);
+      }
+    }
+  } catch (proxyErr: any) {
+    if (proxyErr?.message && !proxyErr.message.includes('fetch')) {
+      // Re-throw meaningful server errors (e.g. sheet permission warnings)
+      throw proxyErr;
+    }
+    console.warn('Proxy fetch failed, attempting direct fetch:', proxyErr);
+  }
+
+  // 2. Direct fetch to Google gviz/tq export
+  try {
+    const gvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
+      sheetName
+    )}`;
+    const res = await fetch(gvizUrl);
+    if (res.ok) {
+      const text = await res.text();
+      if (!text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
+        const parsed = parseCSV(text);
+        if (parsed.length > 0) return parsed;
+      }
+    }
+  } catch (directErr) {
+    console.warn('Direct gviz fetch failed:', directErr);
+  }
+
+  // 3. Direct fetch to Google export format=csv
+  try {
+    const exportUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&sheet=${encodeURIComponent(
+      sheetName
+    )}`;
+    const res = await fetch(exportUrl);
+    if (res.ok) {
+      const text = await res.text();
+      if (!text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
+        const parsed = parseCSV(text);
+        if (parsed.length > 0) return parsed;
+      }
+    }
+  } catch (exportErr) {
+    console.warn('Direct export fetch failed:', exportErr);
+  }
+
+  throw new Error(
+    `ไม่สามารถเชื่อมต่อ Google Sheet (${sheetName}) ได้ โปรดตรวจสอบว่า Spreadsheet ID ถูกต้อง และตั้งค่าแชร์เป็น "Anyone with the link can edit/view"`
+  );
+}
+
+export async function fetchBooksFromSheet(
+  accessToken: string | null | undefined,
+  spreadsheetId: string
+): Promise<Book[]> {
+  let rows: any[][] = [];
+
+  // 1. Try authenticated Google Sheets API v4 first if access token is available
+  if (accessToken) {
+    try {
+      const res = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:M2000`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        rows = data.values || [];
+      }
+    } catch (e) {
+      console.warn('Authenticated Sheets API v4 fetch non-fatal, falling back to public link fetch:', e);
+    }
+  }
+
+  // 2. If no token or API failed, fetch via public Google Sheet CSV endpoint (works for anyone with the link)
+  if (rows.length === 0) {
+    try {
+      const csvData = await fetchPublicSheetCSV(spreadsheetId, 'Books');
+      // Row 0 in CSV is headers ('Code', 'Title', ...), data starts from row 1
+      rows = csvData.length > 1 ? csvData.slice(1) : [];
+    } catch (csvErr: any) {
+      console.error('Failed to fetch Books via public link:', csvErr);
+      throw new Error(csvErr.message || 'Failed to fetch books from Google Sheets');
+    }
+  }
 
   return rows.map((r, idx) => ({
     id: `sheet-${r[0] || idx}`,
@@ -202,22 +352,39 @@ export async function fetchBooksFromSheet(
 }
 
 export async function fetchTransactionsFromSheet(
-  accessToken: string,
+  accessToken: string | null | undefined,
   spreadsheetId: string
 ): Promise<TransactionRecord[]> {
-  const res = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A2:I2000`,
-    {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    }
-  );
+  let rows: any[][] = [];
 
-  if (!res.ok) {
-    throw new Error('Failed to fetch transactions from Google Sheets');
+  // 1. Try authenticated Google Sheets API v4 if access token available
+  if (accessToken) {
+    try {
+      const res = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A2:I2000`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        rows = data.values || [];
+      }
+    } catch (e) {
+      console.warn('Authenticated Sheets API v4 transaction fetch non-fatal:', e);
+    }
   }
 
-  const data = await res.json();
-  const rows: any[][] = data.values || [];
+  // 2. Fall back to public link fetch
+  if (rows.length === 0) {
+    try {
+      const csvData = await fetchPublicSheetCSV(spreadsheetId, 'Transactions');
+      rows = csvData.length > 1 ? csvData.slice(1) : [];
+    } catch (csvErr: any) {
+      console.error('Failed to fetch Transactions via public link:', csvErr);
+      return [];
+    }
+  }
 
   return rows.map((r, idx) => ({
     id: r[0] || `tx-${idx + 1}`,
