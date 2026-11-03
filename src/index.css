@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Prompt', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-prompt: 'Prompt', sans-serif;
+  --color-primary: #2A3B4C;
+  --color-primary-hover: #1E2B38;
+  --color-primary-light: #EBF1F5;
+  --color-heading: #7A4B30;
+  --color-body: #332D29;
+  --color-secondary: #7E7369;
+  --color-canvas: #F8F3EA;
+  --color-card: #FAF5EE;
+  --color-border: #EADBCC;
+}
+
+:root {
+  --primary: #2A3B4C;
+  --primary-hover: #1E2B38;
+  --primary-light: #EBF1F5;
+  --heading: #7A4B30;
+  --body: #332D29;
+  --secondary: #7E7369;
+  --canvas: #F8F3EA;
+  --border: #EADBCC;
+}
+
+*, ::before, ::after {
+  font-family: 'Prompt', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+body {
+  background-color: #F8F3EA;
+  color: #332D29;
+  font-family: 'Prompt', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 400;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: #7A4B30;
+  font-family: 'Prompt', sans-serif;
+  font-weight: 500;
+}
+
+button, input, select, textarea {
+  font-family: 'Prompt', sans-serif;
+}
+
+button {
+  letter-spacing: -0.025em;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2A3B4C;
+  border-radius: 9999px;
+  opacity: 0.3;
+}

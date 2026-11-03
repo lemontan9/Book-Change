@@ -1,0 +1,6 @@
+{
+  "name": "BookSwap Kiosk - ระบบแลกเปลี่ยนหนังสือแบบ Self Service",
+  "description": "ระบบแลกเปลี่ยนหนังสือแบบ Self Service ประจำห้องสมุด เชื่อมต่อ Google Sheets และ Google Drive พร้อมระบบติดตาม L/U และแดชบอร์ดสถิติ",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
