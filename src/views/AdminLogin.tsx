@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ShieldCheck, Lock, User, AlertCircle, X } from 'lucide-react';
 import { googleSignIn } from '../services/firebaseAuth';
 import { StorageService } from '../services/storage';
@@ -16,10 +16,18 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
   onLoginSuccess,
   onGoogleConnected,
 }) => {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isLoadingGoogle, setIsLoadingGoogle] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setUsername('');
+      setPassword('');
+      setErrorMsg(null);
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -104,7 +112,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder="admin"
+                placeholder="กรอกชื่อผู้ใช้งาน"
                 className="w-full pl-8 pr-3 py-2 rounded-xl border border-[#E8ECF2] text-xs font-mono bg-[#F5F7FA] text-[#263238] focus:outline-hidden focus:ring-1 focus:ring-[#4CAF4F]"
               />
             </div>
@@ -120,13 +128,10 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="admin"
+                placeholder="กรอกรหัสผ่าน"
                 className="w-full pl-8 pr-3 py-2 rounded-xl border border-[#E8ECF2] text-xs font-mono bg-[#F5F7FA] text-[#263238] focus:outline-hidden focus:ring-1 focus:ring-[#4CAF4F]"
               />
             </div>
-            <p className="text-[10px] text-[#717171] mt-1 font-normal">
-              ทดสอบ: admin / admin
-            </p>
           </div>
 
           <button
