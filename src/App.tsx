@@ -214,6 +214,8 @@ export default function App() {
             books={books}
             settings={settings}
             transactions={transactions}
+            googleConnected={Boolean(googleToken)}
+            onConnectGoogle={() => setIsLoginModalOpen(true)}
             onSelectTab={handleSelectTab}
             onOpenAddBook={() => setCurrentTab('books')}
           />

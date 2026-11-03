@@ -170,7 +170,7 @@ export async function fetchBooksFromSheet(
   spreadsheetId: string
 ): Promise<Book[]> {
   const res = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:M500`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:M2000`,
     {
       headers: { Authorization: `Bearer ${accessToken}` },
     }
@@ -198,6 +198,39 @@ export async function fetchBooksFromSheet(
     matchedAt: r[10] || undefined,
     matchedWithCode: r[11] || undefined,
     exchangeCount: Number(r[12]) || 1,
+  }));
+}
+
+export async function fetchTransactionsFromSheet(
+  accessToken: string,
+  spreadsheetId: string
+): Promise<TransactionRecord[]> {
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A2:I2000`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+
+  if (!res.ok) {
+    throw new Error('Failed to fetch transactions from Google Sheets');
+  }
+
+  const data = await res.json();
+  const rows: any[][] = data.values || [];
+
+  return rows.map((r, idx) => ({
+    id: r[0] || `tx-${idx + 1}`,
+    timestamp: r[1] || new Date().toISOString(),
+    participant: {
+      participationHistory: r[2] || '',
+      visitFrequencyThisYear: r[3] || '',
+      memberType: r[4] || 'บุคคลทั่วไป/นักเรียน',
+    },
+    booksBrought: r[5] ? r[5].split(',').map((s: string) => s.trim()).filter(Boolean) : [],
+    booksTaken: r[6] ? r[6].split(',').map((s: string) => s.trim()).filter(Boolean) : [],
+    donatedCount: Number(r[7]) || 0,
+    cancelledCount: Number(r[8]) || 0,
   }));
 }
 
