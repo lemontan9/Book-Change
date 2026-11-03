@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   HelpCircle,
   ListOrdered,
+  Lock,
 } from 'lucide-react';
 import type { SystemSettings, StaffAccount, Book } from '../types';
 import { StorageService } from '../services/storage';
@@ -24,7 +25,7 @@ import {
   syncAllTransactionsToSheet,
 } from '../services/googleSheets';
 import { getOrCreateBookCoversFolder } from '../services/googleDrive';
-import { getAccessToken } from '../services/firebaseAuth';
+import { getAccessToken, ALLOWED_GOOGLE_ADMIN_EMAIL } from '../services/firebaseAuth';
 
 interface AdminSettingsProps {
   settings: SystemSettings;
@@ -33,6 +34,7 @@ interface AdminSettingsProps {
   onUpdateSettings: (s: SystemSettings) => void;
   onUpdateStaff: (st: StaffAccount[]) => void;
   googleConnected: boolean;
+  googleUser?: any;
   onConnectGoogle: () => void;
   onSelectTab?: (tab: 'kiosk' | 'dashboard' | 'books' | 'settings') => void;
   onOpenAddBook?: () => void;
@@ -45,10 +47,14 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   onUpdateSettings,
   onUpdateStaff,
   googleConnected,
+  googleUser,
   onConnectGoogle,
   onSelectTab,
   onOpenAddBook,
 }) => {
+  const isSuperAdmin = Boolean(
+    googleUser?.email?.toLowerCase().trim() === ALLOWED_GOOGLE_ADMIN_EMAIL.toLowerCase()
+  );
   const [categories, setCategories] = useState<string[]>(settings.categories);
   const [newCatInput, setNewCatInput] = useState('');
 
@@ -202,7 +208,9 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
       participationHistoryOptions: participationOptions,
       visitFrequencyOptions: frequencyOptions,
       deadStockThresholdDays: Number(deadStockDays) || 30,
-      connectedSpreadsheetId: spreadsheetIdInput.trim() || settings.connectedSpreadsheetId || undefined,
+      connectedSpreadsheetId: isSuperAdmin
+        ? (spreadsheetIdInput.trim() || settings.connectedSpreadsheetId || undefined)
+        : settings.connectedSpreadsheetId,
     };
 
     // 1. Save data locally
@@ -210,7 +218,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
     onUpdateSettings(updated);
     setIsSaved(true);
 
-    // 2. Automatically sync book list to Google Sheet
+    // 2. Automatically sync book list to Google Sheet if super admin
     try {
       const token = await getAccessToken();
       if (!token) {
@@ -222,8 +230,8 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
         return;
       }
 
-      let targetId = spreadsheetIdInput.trim() || updated.connectedSpreadsheetId;
-      if (!targetId) {
+      let targetId = updated.connectedSpreadsheetId;
+      if (!targetId && isSuperAdmin) {
         targetId = await createBookSwapSpreadsheet(token);
         setSpreadsheetIdInput(targetId);
         const folderId = await getOrCreateBookCoversFolder(token);
@@ -231,22 +239,24 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
         updated.connectedDriveFolderId = folderId;
       }
 
-      await syncAllBooksToSheet(token, targetId, books);
-      const allTx = StorageService.getTransactions();
-      await syncAllTransactionsToSheet(token, targetId, allTx);
+      if (targetId) {
+        await syncAllBooksToSheet(token, targetId, books);
+        const allTx = StorageService.getTransactions();
+        await syncAllTransactionsToSheet(token, targetId, allTx);
 
-      updated.lastSyncTime = new Date().toISOString();
-      StorageService.saveSettings(updated);
-      onUpdateSettings(updated);
+        updated.lastSyncTime = new Date().toISOString();
+        StorageService.saveSettings(updated);
+        onUpdateSettings(updated);
 
-      setIsSyncSuccess(true);
-      setTimeout(() => setIsSyncSuccess(false), 3500);
-      setTimeout(() => setIsSaved(false), 3500);
+        setIsSyncSuccess(true);
+        setTimeout(() => setIsSyncSuccess(false), 3500);
+        setTimeout(() => setIsSaved(false), 3500);
 
-      setSyncStatusMsg({
-        type: 'success',
-        text: `บันทึกข้อมูลและซิงค์หนังสือ (${books.length} เล่ม) พร้อมประวัติการแลกเปลี่ยน (${allTx.length} รายการ) ตามโครงสร้างตารางใหม่ (PDPA) สำเร็จ!`,
-      });
+        setSyncStatusMsg({
+          type: 'success',
+          text: `บันทึกข้อมูลและซิงค์หนังสือ (${books.length} เล่ม) พร้อมประวัติการแลกเปลี่ยน (${allTx.length} รายการ) สำเร็จ!`,
+        });
+      }
     } catch (err: any) {
       console.error('Save and sync error:', err);
       setTimeout(() => setIsSaved(false), 3000);
@@ -260,6 +270,14 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   };
 
   const handleCreateNewGoogleSheet = async () => {
+    if (!isSuperAdmin) {
+      setSyncStatusMsg({
+        type: 'error',
+        text: `ไม่อนุญาต: เฉพาะผู้ที่เข้าสู่ระบบด้วย Google บัญชี ${ALLOWED_GOOGLE_ADMIN_EMAIL} เท่านั้นที่มีสิทธิ์สร้าง Google Spreadsheet ใหม่`,
+      });
+      return;
+    }
+
     setIsSyncing(true);
     setSyncStatusMsg(null);
     try {
@@ -305,6 +323,14 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   };
 
   const handleSyncCurrentBooksToGoogle = async () => {
+    if (!isSuperAdmin) {
+      setSyncStatusMsg({
+        type: 'error',
+        text: `ไม่อนุญาต: เฉพาะผู้ที่เข้าสู่ระบบด้วย Google บัญชี ${ALLOWED_GOOGLE_ADMIN_EMAIL} เท่านั้นที่มีสิทธิ์แก้ไขและซิงค์ข้อมูล Google Sheet`,
+      });
+      return;
+    }
+
     setIsSyncing(true);
     setSyncStatusMsg(null);
     try {
@@ -466,7 +492,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
       </div>
 
       <div className="space-y-4">
-        {/* Google Sheets Card */}
+        {/* Google Sheets Card (Restricted strictly to lemontan9@gmail.com) */}
         <div className="bg-white rounded-3xl p-5 border border-[#E8ECF2] shadow-xs">
           <div className="flex items-center justify-between pb-3 border-b border-[#E8ECF2] mb-3">
             <div className="flex items-center gap-2">
@@ -475,19 +501,55 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
                 Google Sheets & Drive Database
               </h3>
             </div>
-            {!googleConnected ? (
+            {isSuperAdmin ? (
+              <span className="text-[10px] font-medium text-[#2E7D32] bg-[#E8F5E9] px-2.5 py-1 rounded-full border border-[#4CAF4F]/30 flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-[#2E7D32]" />
+                Super Admin ({ALLOWED_GOOGLE_ADMIN_EMAIL})
+              </span>
+            ) : googleConnected ? (
+              <span className="text-[10px] font-medium text-[#D32F2F] bg-[#FFEBEE] px-2.5 py-1 rounded-full border border-[#FFCDD2] flex items-center gap-1">
+                <Lock className="w-3.5 h-3.5" />
+                โหมดดูอย่างเดียว (จำกัดสิทธิ์แก้ไข)
+              </span>
+            ) : (
               <button
                 onClick={onConnectGoogle}
-                className="text-[11px] font-medium text-[#2E7D32] bg-[#E8F5E9] px-2.5 py-1 rounded-full border border-[#4CAF4F]/20"
+                className="text-[11px] font-medium text-[#2E7D32] bg-[#E8F5E9] hover:bg-[#C8E6C9] px-2.5 py-1 rounded-full border border-[#4CAF4F]/20 flex items-center gap-1 cursor-pointer transition-colors"
               >
-                เชื่อมต่อ Google
+                <Lock className="w-3.5 h-3.5 text-[#2E7D32]" />
+                เข้าสู่ระบบด้วย {ALLOWED_GOOGLE_ADMIN_EMAIL} เพื่อแก้ไข
               </button>
-            ) : (
-              <span className="text-[10px] font-medium text-[#2E7D32] bg-[#E8F5E9] px-2 py-0.5 rounded-full border border-[#4CAF4F]/20">
-                เชื่อมต่อแล้ว
-              </span>
             )}
           </div>
+
+          {/* Access Control Notice */}
+          {!isSuperAdmin ? (
+            <div className="p-3 bg-[#FFF8E1] border border-[#FFE082] rounded-2xl mb-3 text-xs text-[#8D6E14] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 shadow-xs">
+              <div className="flex items-center gap-2">
+                <Lock className="w-4 h-4 text-[#F57C00] shrink-0" />
+                <div>
+                  <span className="font-semibold text-[#B26A00]">ล็อกการแก้ไข (Read-Only):</span>{' '}
+                  <span>เฉพาะคนที่ Login ด้วย Google Account <strong>{ALLOWED_GOOGLE_ADMIN_EMAIL}</strong> เท่านั้นที่สามารถแก้ไขหรือสร้าง Google Sheet ในส่วนนี้ได้</span>
+                </div>
+              </div>
+              {!googleConnected && (
+                <button
+                  type="button"
+                  onClick={onConnectGoogle}
+                  className="px-3 py-1 bg-[#F57C00] hover:bg-[#E65100] text-white text-[11px] font-medium rounded-xl shadow-xs shrink-0 cursor-pointer transition-colors"
+                >
+                  เข้าสู่ระบบด้วย Google
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="p-2.5 bg-[#E8F5E9] border border-[#A5D6A7] rounded-2xl mb-3 text-xs text-[#1E5C3B] flex items-center gap-2 shadow-xs">
+              <ShieldCheck className="w-4 h-4 text-[#2E7D32] shrink-0" />
+              <span>
+                ได้รับสิทธิ์: คุณเข้าสู่ระบบด้วย Google <strong>{ALLOWED_GOOGLE_ADMIN_EMAIL}</strong> (สามารถแก้ไข Spreadsheet ID และสร้างตาราง Google Sheet ได้)
+              </span>
+            </div>
+          )}
 
           {syncStatusMsg && (
             <div
@@ -506,16 +568,31 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
 
           <div className="space-y-2 mb-3">
             <div>
-              <label className="block text-[11px] font-medium text-[#263238] mb-1">
-                Spreadsheet ID
-              </label>
-              <input
-                type="text"
-                placeholder="Google Spreadsheet ID"
-                value={spreadsheetIdInput}
-                onChange={(e) => setSpreadsheetIdInput(e.target.value)}
-                className="w-full px-3 py-2 rounded-xl border border-[#E8ECF2] font-mono text-xs bg-[#F5F7FA] text-[#263238]"
-              />
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[11px] font-medium text-[#263238]">
+                  Spreadsheet ID
+                </label>
+                {!isSuperAdmin && (
+                  <span className="text-[10px] text-[#8A7E74] flex items-center gap-1">
+                    <Lock className="w-3 h-3 text-[#F57C00]" /> ล็อกการแก้ไข
+                  </span>
+                )}
+              </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  disabled={!isSuperAdmin}
+                  readOnly={!isSuperAdmin}
+                  placeholder={isSuperAdmin ? "Google Spreadsheet ID" : "Google Spreadsheet ID (ล็อกการแก้ไข)"}
+                  value={spreadsheetIdInput}
+                  onChange={(e) => isSuperAdmin && setSpreadsheetIdInput(e.target.value)}
+                  className={`w-full px-3 py-2 rounded-xl border border-[#E8ECF2] font-mono text-xs ${
+                    isSuperAdmin
+                      ? 'bg-[#F5F7FA] text-[#263238] focus:ring-1 focus:ring-[#4CAF4F]'
+                      : 'bg-[#ECEFF1] text-[#78909C] cursor-not-allowed select-none'
+                  }`}
+                />
+              </div>
             </div>
             {settings.connectedDriveFolderId && (
               <p className="text-[10px] text-[#717171] flex items-center gap-1 font-normal">
@@ -554,21 +631,42 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
 
           <div className="flex flex-col sm:flex-row gap-2">
             <button
-              disabled={isSyncing}
+              disabled={isSyncing || !isSuperAdmin}
               onClick={handleCreateNewGoogleSheet}
-              className="flex-1 py-1.5 px-3 text-xs font-medium text-white bg-[#2a3b4c] hover:bg-[#1e2b38] disabled:opacity-50 rounded-xl flex items-center justify-center gap-1 shadow-xs cursor-pointer tracking-tight"
+              title={
+                !isSuperAdmin
+                  ? `เฉพาะผู้ที่ Login ด้วย Google บัญชี ${ALLOWED_GOOGLE_ADMIN_EMAIL} เท่านั้นที่สามารถสร้าง Google Sheet ได้`
+                  : undefined
+              }
+              className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-xl flex items-center justify-center gap-1 shadow-xs tracking-tight transition-all ${
+                isSuperAdmin
+                  ? 'text-white bg-[#2a3b4c] hover:bg-[#1e2b38] cursor-pointer'
+                  : 'text-[#90A4AE] bg-[#CFD8DC] cursor-not-allowed opacity-80'
+              }`}
             >
-              <Plus className="w-3.5 h-3.5" />
-              สร้าง Google Sheet ใหม่อัตโนมัติ
+              {!isSuperAdmin ? <Lock className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+              สร้าง Google Sheet ใหม่อัตโนมัติ {!isSuperAdmin && '(ล็อก)'}
             </button>
             <button
-              disabled={isSyncing}
+              disabled={isSyncing || !isSuperAdmin}
               onClick={handleSyncCurrentBooksToGoogle}
-              title="ระบบจะซิงค์อัตโนมัติเมื่อเพิ่มหรือ Match หนังสือ และสามารถกดปุ่มนี้เพื่อซิงค์ทันทีได้ตลอดเวลา"
-              className="py-1.5 px-3 text-xs font-medium text-[#2E7D32] bg-[#E8F5E9] hover:bg-[#C8E6C9] disabled:opacity-50 rounded-xl flex items-center justify-center gap-1.5 border border-[#4CAF4F]/30 tracking-tight transition-colors cursor-pointer"
+              title={
+                !isSuperAdmin
+                  ? `เฉพาะผู้ที่ Login ด้วย Google บัญชี ${ALLOWED_GOOGLE_ADMIN_EMAIL} เท่านั้นที่สามารถแก้ไข/ซิงค์ Google Sheet ได้`
+                  : 'ระบบจะซิงค์อัตโนมัติเมื่อเพิ่มหรือ Match หนังสือ และสามารถกดปุ่มนี้เพื่อซิงค์ทันทีได้ตลอดเวลา'
+              }
+              className={`py-1.5 px-3 text-xs font-medium rounded-xl flex items-center justify-center gap-1.5 border tracking-tight transition-colors ${
+                isSuperAdmin
+                  ? 'text-[#2E7D32] bg-[#E8F5E9] hover:bg-[#C8E6C9] border-[#4CAF4F]/30 cursor-pointer'
+                  : 'text-[#90A4AE] bg-[#F5F5F5] border-[#E0E0E0] cursor-not-allowed opacity-80'
+              }`}
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>ซิงค์ข้อมูลอัตโนมัติ (หรือกดซิงค์ทันที)</span>
+              {!isSuperAdmin ? (
+                <Lock className="w-3.5 h-3.5" />
+              ) : (
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+              )}
+              <span>ซิงค์ข้อมูลอัตโนมัติ {!isSuperAdmin && '(ล็อก)'}</span>
             </button>
           </div>
 

@@ -20,6 +20,8 @@ export const SCOPES = [
 const provider = new GoogleAuthProvider();
 SCOPES.forEach((scope) => provider.addScope(scope));
 
+export const ALLOWED_GOOGLE_ADMIN_EMAIL = 'lemontan9@gmail.com';
+
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
 
@@ -29,6 +31,13 @@ export const initAuth = (
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
+      const email = user.email?.toLowerCase().trim();
+      if (email !== ALLOWED_GOOGLE_ADMIN_EMAIL.toLowerCase()) {
+        await signOut(auth);
+        cachedAccessToken = null;
+        if (onAuthFailure) onAuthFailure();
+        return;
+      }
       if (cachedAccessToken) {
         if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
       } else if (!isSigningIn) {
@@ -46,6 +55,15 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
   try {
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
+    const email = result.user.email?.toLowerCase().trim();
+    if (email !== ALLOWED_GOOGLE_ADMIN_EMAIL.toLowerCase()) {
+      await signOut(auth);
+      cachedAccessToken = null;
+      throw new Error(
+        `สิทธิ์การเข้าถึงถูกจำกัด: เฉพาะบัญชี ${ALLOWED_GOOGLE_ADMIN_EMAIL} เท่านั้นที่สามารถเข้าสู่ระบบด้วย Google ได้ (บัญชีที่คุณใช้คือ ${email || 'ไม่ระบุ'})`
+      );
+    }
+
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       throw new Error('Failed to retrieve OAuth access token from Firebase');

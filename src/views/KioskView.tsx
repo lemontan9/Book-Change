@@ -1147,19 +1147,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
                     )}
                   </div>
 
-                  {/* Input: ISBN Barcode (ถ้ามี) */}
-                  <div>
-                    <input
-                      type="text"
-                      value={entry.isbn || ''}
-                      onChange={(e) => handleBookEntryChange(idx, 'isbn', e.target.value)}
-                      placeholder="ISBN Barcode (ถ้ามี)"
-                      style={{ paddingTop: '6px', paddingBottom: '6px' }}
-                      className="w-full bg-white border border-[#D8CABE] rounded-2xl px-4 py-[6px] text-sm text-[#332D29] placeholder-[#9A9188] focus:outline-none focus:ring-2 focus:ring-[#7A4B30] transition-all"
-                    />
-                  </div>
-
-                  {/* Input: ราคา (หากไม่มีโปรดประมาณมูลค่า) */}
+                  {/* Input: ราคา * (หากไม่มีโปรดประมาณมูลค่า) */}
                   <div>
                     <input
                       type="number"
@@ -1173,7 +1161,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
                           e.target.value === '' ? undefined : Number(e.target.value)
                         )
                       }
-                      placeholder="ราคา (หากไม่มีโปรดประมาณมูลค่า)"
+                      placeholder="ราคา * (หากไม่มีโปรดประมาณมูลค่า)"
                       style={{ paddingTop: '6px', paddingBottom: '6px' }}
                       className={`w-full bg-white border ${
                         bookValidationErrors[idx]?.includes('ราคา') ? 'border-red-500 bg-red-50/20' : 'border-[#D8CABE]'
@@ -1182,6 +1170,18 @@ export const KioskView: React.FC<KioskViewProps> = ({
                     {bookValidationErrors[idx]?.includes('ราคา') && (
                       <p className="text-xs text-red-500 mt-1 pl-1">{bookValidationErrors[idx]}</p>
                     )}
+                  </div>
+
+                  {/* Input: ISBN Barcode (ถ้ามี) */}
+                  <div>
+                    <input
+                      type="text"
+                      value={entry.isbn || ''}
+                      onChange={(e) => handleBookEntryChange(idx, 'isbn', e.target.value)}
+                      placeholder="ISBN Barcode (ถ้ามี)"
+                      style={{ paddingTop: '6px', paddingBottom: '6px' }}
+                      className="w-full bg-white border border-[#D8CABE] rounded-2xl px-4 py-[6px] text-sm text-[#332D29] placeholder-[#9A9188] focus:outline-none focus:ring-2 focus:ring-[#7A4B30] transition-all"
+                    />
                   </div>
 
                   {/* Dropdown: ประเภทหนังสือ: * */}

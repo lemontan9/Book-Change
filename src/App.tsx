@@ -229,6 +229,7 @@ export default function App() {
             onUpdateSettings={(updated) => setSettings(updated)}
             onUpdateStaff={(updated) => setStaff(updated)}
             googleConnected={Boolean(googleToken)}
+            googleUser={googleUser}
             onConnectGoogle={() => setIsLoginModalOpen(true)}
             onSelectTab={handleSelectTab}
             onOpenAddBook={() => setCurrentTab('books')}
