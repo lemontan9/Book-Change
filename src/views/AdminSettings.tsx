@@ -602,33 +602,6 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
             )}
           </div>
 
-          {/* Table Structure PDPA Summary */}
-          <div className="p-3 bg-[#F8FAFC] rounded-2xl border border-[#E2E8F0] mb-3 text-[11px] text-[#475569] space-y-2">
-            <div className="flex items-center justify-between font-semibold text-[#1E293B]">
-              <span className="flex items-center gap-1.5">
-                <ShieldCheck className="w-4 h-4 text-[#4CAF4F]" />
-                โครงสร้าง Google Sheet (ตามมาตรฐาน PDPA)
-              </span>
-              <span className="text-[10px] text-[#2E7D32] bg-[#E8F5E9] px-2 py-0.5 rounded-md font-medium">
-                ยกเลิกเก็บเบอร์โทรและอีเมลแล้ว
-              </span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[10.5px]">
-              <div className="bg-white p-2 rounded-xl border border-[#E2E8F0]">
-                <p className="font-semibold text-[#0F172A] mb-0.5">ตาราง Books (13 คอลัมน์)</p>
-                <p className="text-[#64748B] text-[10px] leading-relaxed">
-                  Code, Title, Category, Price, Status, Source, MemberType, DriveFileId, CoverImage, CreatedAt, MatchedAt, MatchedWithCode, ExchangeCount
-                </p>
-              </div>
-              <div className="bg-white p-2 rounded-xl border border-[#E2E8F0]">
-                <p className="font-semibold text-[#0F172A] mb-0.5">ตาราง Transactions (9 คอลัมน์)</p>
-                <p className="text-[#64748B] text-[10px] leading-relaxed">
-                  TransactionId, Timestamp, ParticipationHistory, VisitFrequencyThisYear, MemberType, BooksBrought, BooksTaken, DonatedCount, CancelledCount
-                </p>
-              </div>
-            </div>
-          </div>
-
           <div className="flex flex-col sm:flex-row gap-2">
             <button
               disabled={isSyncing || !isSuperAdmin}
