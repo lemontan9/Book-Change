@@ -643,6 +643,45 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
             </button>
           </div>
 
+          <div className="mt-3 p-3 bg-[#FAF8F5] rounded-2xl border border-[#EADBCC]/60 space-y-2">
+            <div className="flex items-center justify-between text-[11px] font-semibold text-[#5A3825]">
+              <span>โครงสร้างคอลัมน์ใน Google Sheet (ตามมาตรฐาน PDPA)</span>
+              <span className="text-[10px] bg-[#E8F5E9] text-[#2E7D32] px-2 py-0.5 rounded-full font-medium">อัปเดตล่าสุด</span>
+            </div>
+            
+            <div className="space-y-1 text-[10.5px]">
+              <div>
+                <span className="font-semibold text-[#263238]">ชีต "Books" (15 คอลัมน์): </span>
+                <span className="text-[#607D8B] font-mono text-[10px]">
+                  Code, Title, Category, Price, Status, Source, MemberType, DriveFileId, CoverImage, CreatedAt, MatchedAt, MatchedWithCode, ExchangeCount, 
+                </span>
+                <span className="inline-flex gap-1 ml-1">
+                  <span className="bg-[#FFF3E0] text-[#E65100] border border-[#FFE082] px-1.5 py-0.2 rounded font-mono font-semibold text-[9.5px]">
+                    +TransactionId
+                  </span>
+                  <span className="bg-[#FFF3E0] text-[#E65100] border border-[#FFE082] px-1.5 py-0.2 rounded font-mono font-semibold text-[9.5px]">
+                    +ISBN
+                  </span>
+                </span>
+              </div>
+
+              <div>
+                <span className="font-semibold text-[#263238]">ชีต "Transactions" (11 คอลัมน์): </span>
+                <span className="text-[#607D8B] font-mono text-[10px]">
+                  TransactionId, Timestamp, ParticipationHistory, VisitFrequencyThisYear, MemberType, BooksBrought, BooksTaken, DonatedCount, CancelledCount, 
+                </span>
+                <span className="inline-flex gap-1 ml-1">
+                  <span className="bg-[#E3F2FD] text-[#0D47A1] border border-[#90CAF9] px-1.5 py-0.2 rounded font-mono font-semibold text-[9.5px]">
+                    +BooksBroughtCount
+                  </span>
+                  <span className="bg-[#E3F2FD] text-[#0D47A1] border border-[#90CAF9] px-1.5 py-0.2 rounded font-mono font-semibold text-[9.5px]">
+                    +BooksTakenCount
+                  </span>
+                </span>
+              </div>
+            </div>
+          </div>
+
           <div className="mt-2.5 pt-2.5 border-t border-[#E8ECF2] flex items-center justify-between text-[11px] text-[#2E7D32]">
             <span className="flex items-center gap-1.5 font-medium">
               <span className="w-2 h-2 rounded-full bg-[#4CAF4F] animate-pulse shrink-0" />

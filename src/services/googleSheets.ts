@@ -14,6 +14,8 @@ export const BOOK_HEADERS = [
   'MatchedAt',
   'MatchedWithCode',
   'ExchangeCount',
+  'TransactionId',
+  'ISBN',
 ];
 
 export const TRANSACTION_HEADERS = [
@@ -26,6 +28,8 @@ export const TRANSACTION_HEADERS = [
   'BooksTaken',
   'DonatedCount',
   'CancelledCount',
+  'BooksBroughtCount',
+  'BooksTakenCount',
 ];
 
 /**
@@ -66,9 +70,9 @@ export async function createBookSwapSpreadsheet(accessToken: string): Promise<st
 }
 
 export async function writeHeaders(accessToken: string, spreadsheetId: string): Promise<void> {
-  // Write Books headers (A1:M1, 13 columns - no phone/email/ownerName for PDPA)
+  // Write Books headers (A1:O1, 15 columns - includes TransactionId & ISBN, no phone/email for PDPA)
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:M1?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:O1?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {
@@ -81,9 +85,9 @@ export async function writeHeaders(accessToken: string, spreadsheetId: string): 
     }
   );
 
-  // Write Transactions headers (A1:I1, 9 columns)
+  // Write Transactions headers (A1:K1, 11 columns - includes BooksBroughtCount & BooksTakenCount)
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A1:I1?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A1:K1?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {
@@ -116,10 +120,12 @@ export async function appendBookToSheet(
     book.matchedAt || '',
     book.matchedWithCode || '',
     book.exchangeCount || 1,
+    book.transactionId || '',
+    book.isbn || '',
   ];
 
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A:M:append?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A:O:append?valueInputOption=USER_ENTERED`,
     {
       method: 'POST',
       headers: {
@@ -138,6 +144,9 @@ export async function appendTransactionToSheet(
   spreadsheetId: string,
   t: TransactionRecord
 ): Promise<void> {
+  const broughtCount = t.booksBroughtCount !== undefined ? t.booksBroughtCount : t.booksBrought.length;
+  const takenCount = t.booksTakenCount !== undefined ? t.booksTakenCount : t.booksTaken.length;
+
   const row = [
     t.id,
     t.timestamp,
@@ -148,10 +157,12 @@ export async function appendTransactionToSheet(
     t.booksTaken.join(', '),
     t.donatedCount,
     t.cancelledCount,
+    broughtCount,
+    takenCount,
   ];
 
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A:I:append?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A:K:append?valueInputOption=USER_ENTERED`,
     {
       method: 'POST',
       headers: {
@@ -297,24 +308,54 @@ export async function fetchPublicSheetCSV(
   );
 }
 
+/**
+ * Helper to dynamically map column positions from header names
+ */
+function getColumnIndexMap(headerRow: string[] | undefined, defaultHeaders: string[]): Record<string, number> {
+  const map: Record<string, number> = {};
+  defaultHeaders.forEach((h, idx) => {
+    map[h] = idx;
+  });
+
+  if (!headerRow || headerRow.length === 0) return map;
+
+  const normalize = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const normalizedHeaders = headerRow.map(normalize);
+
+  defaultHeaders.forEach((name) => {
+    const target = normalize(name);
+    const foundIdx = normalizedHeaders.findIndex((h) => h === target);
+    if (foundIdx !== -1) {
+      map[name] = foundIdx;
+    }
+  });
+
+  return map;
+}
+
 export async function fetchBooksFromSheet(
   accessToken: string | null | undefined,
   spreadsheetId: string
 ): Promise<Book[]> {
   let rows: any[][] = [];
+  let headerRow: string[] | undefined;
 
   // 1. Try authenticated Google Sheets API v4 first if access token is available
   if (accessToken) {
     try {
       const res = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:M2000`,
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:O2000`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
         }
       );
       if (res.ok) {
         const data = await res.json();
-        rows = data.values || [];
+        const allValues: any[][] = data.values || [];
+        if (allValues.length > 0) {
+          headerRow = allValues[0];
+          rows = allValues.slice(1);
+        }
       }
     } catch (e) {
       console.warn('Authenticated Sheets API v4 fetch non-fatal, falling back to public link fetch:', e);
@@ -326,28 +367,35 @@ export async function fetchBooksFromSheet(
     try {
       const csvData = await fetchPublicSheetCSV(spreadsheetId, 'Books');
       // Row 0 in CSV is headers ('Code', 'Title', ...), data starts from row 1
-      rows = csvData.length > 1 ? csvData.slice(1) : [];
+      if (csvData.length > 0) {
+        headerRow = csvData[0];
+        rows = csvData.length > 1 ? csvData.slice(1) : [];
+      }
     } catch (csvErr: any) {
       console.error('Failed to fetch Books via public link:', csvErr);
       throw new Error(csvErr.message || 'Failed to fetch books from Google Sheets');
     }
   }
 
+  const col = getColumnIndexMap(headerRow, BOOK_HEADERS);
+
   return rows.map((r, idx) => ({
-    id: `sheet-${r[0] || idx}`,
-    code: r[0] || `L${idx + 1}`,
-    title: r[1] || 'Untitled',
-    category: r[2] || 'หนังสือทั่วไป',
-    price: Number(r[3]) || 0,
-    status: (r[4] as any) || 'Available',
-    source: (r[5] as any) || 'Library',
-    memberType: r[6] || undefined,
-    driveFileId: r[7] || undefined,
-    coverImage: r[8] || undefined,
-    createdAt: r[9] || new Date().toISOString(),
-    matchedAt: r[10] || undefined,
-    matchedWithCode: r[11] || undefined,
-    exchangeCount: Number(r[12]) || 1,
+    id: `sheet-${r[col.Code] || idx}`,
+    code: r[col.Code] || `L${idx + 1}`,
+    title: r[col.Title] || 'Untitled',
+    category: r[col.Category] || 'หนังสือทั่วไป',
+    price: Number(r[col.Price]) || 0,
+    status: (r[col.Status] as any) || 'Available',
+    source: (r[col.Source] as any) || 'Library',
+    memberType: r[col.MemberType] || undefined,
+    driveFileId: r[col.DriveFileId] || undefined,
+    coverImage: r[col.CoverImage] || undefined,
+    createdAt: r[col.CreatedAt] || new Date().toISOString(),
+    matchedAt: r[col.MatchedAt] || undefined,
+    matchedWithCode: r[col.MatchedWithCode] || undefined,
+    exchangeCount: Number(r[col.ExchangeCount]) || 1,
+    transactionId: r[col.TransactionId] || undefined,
+    isbn: r[col.ISBN] || undefined,
   }));
 }
 
@@ -356,19 +404,24 @@ export async function fetchTransactionsFromSheet(
   spreadsheetId: string
 ): Promise<TransactionRecord[]> {
   let rows: any[][] = [];
+  let headerRow: string[] | undefined;
 
   // 1. Try authenticated Google Sheets API v4 if access token available
   if (accessToken) {
     try {
       const res = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A2:I2000`,
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A1:K2000`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
         }
       );
       if (res.ok) {
         const data = await res.json();
-        rows = data.values || [];
+        const allValues: any[][] = data.values || [];
+        if (allValues.length > 0) {
+          headerRow = allValues[0];
+          rows = allValues.slice(1);
+        }
       }
     } catch (e) {
       console.warn('Authenticated Sheets API v4 transaction fetch non-fatal:', e);
@@ -379,26 +432,49 @@ export async function fetchTransactionsFromSheet(
   if (rows.length === 0) {
     try {
       const csvData = await fetchPublicSheetCSV(spreadsheetId, 'Transactions');
-      rows = csvData.length > 1 ? csvData.slice(1) : [];
+      if (csvData.length > 0) {
+        headerRow = csvData[0];
+        rows = csvData.length > 1 ? csvData.slice(1) : [];
+      }
     } catch (csvErr: any) {
       console.error('Failed to fetch Transactions via public link:', csvErr);
       return [];
     }
   }
 
-  return rows.map((r, idx) => ({
-    id: r[0] || `tx-${idx + 1}`,
-    timestamp: r[1] || new Date().toISOString(),
-    participant: {
-      participationHistory: r[2] || '',
-      visitFrequencyThisYear: r[3] || '',
-      memberType: r[4] || 'บุคคลทั่วไป/นักเรียน',
-    },
-    booksBrought: r[5] ? r[5].split(',').map((s: string) => s.trim()).filter(Boolean) : [],
-    booksTaken: r[6] ? r[6].split(',').map((s: string) => s.trim()).filter(Boolean) : [],
-    donatedCount: Number(r[7]) || 0,
-    cancelledCount: Number(r[8]) || 0,
-  }));
+  const col = getColumnIndexMap(headerRow, TRANSACTION_HEADERS);
+
+  return rows.map((r, idx) => {
+    const broughtStr = r[col.BooksBrought] || '';
+    const takenStr = r[col.BooksTaken] || '';
+    const booksBrought = broughtStr ? broughtStr.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
+    const booksTaken = takenStr ? takenStr.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
+
+    const broughtCountVal = r[col.BooksBroughtCount];
+    const takenCountVal = r[col.BooksTakenCount];
+    const booksBroughtCount = broughtCountVal !== undefined && broughtCountVal !== '' && !isNaN(Number(broughtCountVal))
+      ? Number(broughtCountVal)
+      : booksBrought.length;
+    const booksTakenCount = takenCountVal !== undefined && takenCountVal !== '' && !isNaN(Number(takenCountVal))
+      ? Number(takenCountVal)
+      : booksTaken.length;
+
+    return {
+      id: r[col.TransactionId] || `tx-${idx + 1}`,
+      timestamp: r[col.Timestamp] || new Date().toISOString(),
+      participant: {
+        participationHistory: r[col.ParticipationHistory] || '',
+        visitFrequencyThisYear: r[col.VisitFrequencyThisYear] || '',
+        memberType: r[col.MemberType] || 'บุคคลทั่วไป/นักเรียน',
+      },
+      booksBrought,
+      booksTaken,
+      donatedCount: Number(r[col.DonatedCount]) || 0,
+      cancelledCount: Number(r[col.CancelledCount]) || 0,
+      booksBroughtCount,
+      booksTakenCount,
+    };
+  });
 }
 
 export async function syncAllBooksToSheet(
@@ -406,7 +482,7 @@ export async function syncAllBooksToSheet(
   spreadsheetId: string,
   books: Book[]
 ): Promise<void> {
-  // Clear and rewrite books tab header
+  // Clear and rewrite books tab header (A1:O1, 15 columns)
   await writeHeaders(accessToken, spreadsheetId);
 
   // Clear existing rows in Books tab to prevent leftover ghost columns from previous versions
@@ -439,12 +515,14 @@ export async function syncAllBooksToSheet(
     b.matchedAt || '',
     b.matchedWithCode || '',
     b.exchangeCount || 1,
+    b.transactionId || '',
+    b.isbn || '',
   ]);
 
   if (rows.length === 0) return;
 
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:M${rows.length + 1}?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:O${rows.length + 1}?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {
@@ -489,12 +567,14 @@ export async function syncAllTransactionsToSheet(
     t.booksTaken.join(', '),
     t.donatedCount,
     t.cancelledCount,
+    t.booksBroughtCount !== undefined ? t.booksBroughtCount : t.booksBrought.length,
+    t.booksTakenCount !== undefined ? t.booksTakenCount : t.booksTaken.length,
   ]);
 
   if (rows.length === 0) return;
 
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A2:I${rows.length + 1}?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A2:K${rows.length + 1}?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {

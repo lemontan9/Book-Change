@@ -587,6 +587,8 @@ export class StorageService {
       'วันที่แลกเปลี่ยน',
       'แลกกับรหัส',
       'จำนวนรอบแลกเปลี่ยน',
+      'รหัสธุรกรรม (TransactionId)',
+      'ISBN',
     ];
 
     const rows = books.map((b) => [
@@ -601,6 +603,8 @@ export class StorageService {
       b.matchedAt ? new Date(b.matchedAt).toLocaleDateString('th-TH') : '-',
       b.matchedWithCode || '-',
       b.exchangeCount || 1,
+      b.transactionId || '-',
+      b.isbn || '-',
     ]);
 
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');

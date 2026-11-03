@@ -6,6 +6,8 @@ import {
   Users,
   Repeat,
   Layers,
+  BookMarked,
+  Hash,
 } from 'lucide-react';
 import type { Book, SystemSettings, TransactionRecord } from '../types';
 import { fetchBooksFromSheet, fetchTransactionsFromSheet } from '../services/googleSheets';
@@ -102,7 +104,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   }, [loadDataFromGoogleSheet]);
 
   // 1. Metric Counts strictly from Google Sheet
-  const totalParticipants = sheetTransactions.length;
+  // Map distinct transactions by Transaction ID (Count Distinct)
+  const distinctTransactionMap = useMemo(() => {
+    const map = new Map<string, TransactionRecord>();
+    sheetTransactions.forEach((t) => {
+      const rawId = (t.id || '').trim();
+      if (rawId) {
+        if (!map.has(rawId)) {
+          map.set(rawId, t);
+        }
+      }
+    });
+    return map;
+  }, [sheetTransactions]);
+
+  // Distinct count of transaction ID (Count Distinct)
+  const totalParticipants = distinctTransactionMap.size || sheetTransactions.length;
   const totalBooksCount = sheetBooks.length;
   const availableBooksCount = sheetBooks.filter((b) => b.status === 'Available').length;
 
@@ -113,6 +130,76 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const matchedUCount = sheetBooks.filter(
     (b) => b.status === 'Matched' && (b.code.toUpperCase().startsWith('U') || b.source === 'User')
   ).length;
+
+  // Statistics of books brought per transaction
+  const booksPerTransactionStats = useMemo(() => {
+    const buckets = {
+      one: 0, // 1 เล่ม
+      two: 0, // 2 เล่ม
+      three: 0, // 3 เล่ม
+      fourPlus: 0, // 4 เล่มขึ้นไป
+    };
+
+    let totalBrought = 0;
+    const list = Array.from(distinctTransactionMap.values());
+    const totalTx = list.length;
+
+    list.forEach((t) => {
+      const count = Array.isArray(t.booksBrought) ? t.booksBrought.length : 0;
+      totalBrought += count;
+      if (count === 1) {
+        buckets.one++;
+      } else if (count === 2) {
+        buckets.two++;
+      } else if (count === 3) {
+        buckets.three++;
+      } else if (count >= 4) {
+        buckets.fourPlus++;
+      }
+    });
+
+    const avgPerTx = totalTx > 0 ? (totalBrought / totalTx).toFixed(1) : '0';
+
+    return {
+      totalTx,
+      totalBrought,
+      avgPerTx,
+      buckets: [
+        {
+          label: 'นำมา 1 เล่ม',
+          count: buckets.one,
+          percentage: totalTx > 0 ? Math.round((buckets.one / totalTx) * 100) : 0,
+          color: '#9ED8EB',
+        },
+        {
+          label: 'นำมา 2 เล่ม',
+          count: buckets.two,
+          percentage: totalTx > 0 ? Math.round((buckets.two / totalTx) * 100) : 0,
+          color: '#7CA992',
+        },
+        {
+          label: 'นำมา 3 เล่ม',
+          count: buckets.three,
+          percentage: totalTx > 0 ? Math.round((buckets.three / totalTx) * 100) : 0,
+          color: '#FFB7A5',
+        },
+        {
+          label: 'นำมา 4 เล่มขึ้นไป',
+          count: buckets.fourPlus,
+          percentage: totalTx > 0 ? Math.round((buckets.fourPlus / totalTx) * 100) : 0,
+          color: '#B4A7D6',
+        },
+      ],
+      recentTransactions: list.slice(0, 5).map((t) => ({
+        id: t.id,
+        timestamp: t.timestamp,
+        memberType: t.participant.memberType,
+        broughtCount: Array.isArray(t.booksBrought) ? t.booksBrought.length : 0,
+        broughtCodes: t.booksBrought || [],
+        takenCodes: t.booksTaken || [],
+      })),
+    };
+  }, [distinctTransactionMap]);
 
   // 2. Bar Chart Data (Category breakdown of Available books strictly from Google Sheet)
   const categoryBarData = useMemo(() => {
@@ -332,7 +419,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* 4. Three Metric Banner Cards (Computed 100% from Google Sheet) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {/* Sky Blue Card: ผู้เข้าร่วมกิจกรรมทั้งหมด */}
+        {/* Sky Blue Card: ผู้เข้าร่วมกิจกรรมทั้งหมด (Count Distinct Transaction ID) */}
         <div
           style={{ minHeight: '94px' }}
           className="bg-[#9ED8EB] border border-white/60 rounded-2xl sm:rounded-3xl p-4 shadow-xs flex flex-col justify-between"
@@ -343,9 +430,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </span>
             <Users className="w-4 h-4 text-[#1F4B5B]/60" />
           </div>
-          <div className="text-2xl sm:text-3xl font-bold text-[#184E60] tracking-tight">
-            {totalParticipants.toLocaleString()}
-            <span className="text-xs font-normal text-[#1F4B5B] ml-2">คน</span>
+          <div>
+            <div className="text-2xl sm:text-3xl font-bold text-[#184E60] tracking-tight">
+              {totalParticipants.toLocaleString()}
+              <span className="text-xs font-normal text-[#1F4B5B] ml-2">คน (Distinct Transaction)</span>
+            </div>
+            <div className="text-[11px] text-[#1F4B5B]/85 font-medium mt-0.5">
+              รวมนำหนังสือมา {booksPerTransactionStats.totalBrought} เล่ม (เฉลี่ย {booksPerTransactionStats.avgPerTx} เล่ม/ครั้ง)
+            </div>
           </div>
         </div>
 
@@ -679,6 +771,127 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* 6. NEW: สถิติจำนวนหนังสือที่นำมาร่วมกิจกรรม ต่อครั้งการแลก (Books Brought per Transaction) */}
+      <div className="bg-[#FAF5EE] border border-[#EADBCC] rounded-2xl sm:rounded-3xl p-5 sm:p-6 shadow-xs space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-[#263238] font-bold text-sm sm:text-base">
+                สถิติจำนวนหนังสือที่นำมาร่วมกิจกรรม ต่อครั้งการแลก
+              </h2>
+              <span className="text-[11px] font-medium bg-[#E8F5E9] text-[#2E7D32] px-2.5 py-0.5 rounded-full border border-[#4CAF4F]/20">
+                Transaction Count
+              </span>
+            </div>
+            <p className="text-[10px] sm:text-xs text-[#8A7E74] mt-0.5">
+              วิเคราะห์จำนวนเล่มที่ผู้เข้าร่วมแต่ละคนนำมาร่วมกิจกรรมในแต่ละธุรกรรม (นับจาก Transaction ID)
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-semibold bg-white/95 text-[#1F4B5B] border border-[#EADBCC] px-3 py-1 rounded-xl shadow-xs font-mono">
+              เฉลี่ย {booksPerTransactionStats.avgPerTx} เล่ม/ครั้ง
+            </span>
+            <span className="text-xs font-semibold bg-[#2A3B4C] text-white px-3 py-1 rounded-xl shadow-xs font-mono">
+              รวม {booksPerTransactionStats.totalBrought} เล่ม ({booksPerTransactionStats.totalTx} ธุรกรรม)
+            </span>
+          </div>
+        </div>
+
+        {/* 4 Distribution Bucket Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {booksPerTransactionStats.buckets.map((b) => (
+            <div
+              key={b.label}
+              className="bg-white/95 border border-[#EADBCC]/80 rounded-2xl p-4 shadow-xs flex flex-col justify-between transition-all hover:border-[#7A4B30]/30"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-[#4D4D4D]">{b.label}</span>
+                <span
+                  className="text-[10px] font-bold font-mono px-2 py-0.5 rounded-full"
+                  style={{ backgroundColor: `${b.color}35`, color: '#263238' }}
+                >
+                  {b.percentage}%
+                </span>
+              </div>
+
+              <div className="my-2.5 flex items-baseline gap-1.5">
+                <span className="text-2xl sm:text-3xl font-bold text-[#263238] font-mono tracking-tight">
+                  {b.count}
+                </span>
+                <span className="text-xs text-[#8A7E74]">ครั้งการแลก</span>
+              </div>
+
+              {/* Progress bar */}
+              <div className="w-full bg-[#EFE5D6] h-2 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{
+                    width: `${Math.max(b.percentage, b.count > 0 ? 5 : 0)}%`,
+                    backgroundColor: b.color,
+                  }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Recent Transactions Breakdown Table */}
+        {booksPerTransactionStats.recentTransactions.length > 0 ? (
+          <div className="mt-2 pt-3 border-t border-[#EADBCC]/60">
+            <div className="flex items-center justify-between mb-2.5">
+              <h3 className="text-xs font-bold text-[#263238] flex items-center gap-1.5">
+                <Hash className="w-3.5 h-3.5 text-[#7A4B30]" />
+                รายการ Transaction ล่าสุด (แยกตามจำนวนเล่มที่นำมาร่วม)
+              </h3>
+              <span className="text-[10px] text-[#8A7E74]">
+                ข้อมูลจริงจาก Google Sheet
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              {booksPerTransactionStats.recentTransactions.map((tx) => (
+                <div
+                  key={tx.id}
+                  className="bg-white/90 border border-[#EADBCC]/70 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs flex-wrap gap-2 shadow-2xs"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono font-bold text-xs text-[#2A3B4C] bg-[#F5F7FA] px-2.5 py-1 rounded-lg border border-[#E8ECF2]">
+                      {tx.id}
+                    </span>
+                    <span className="text-[#332D29] font-medium text-xs">
+                      {tx.memberType}
+                    </span>
+                    {tx.timestamp && (
+                      <span className="text-[10px] text-[#8A7E74] hidden sm:inline">
+                        • {new Date(tx.timestamp).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2.5">
+                    <span className="inline-flex items-center gap-1 font-semibold bg-[#E8F5E9] text-[#2E7D32] border border-[#4CAF4F]/20 px-2.5 py-1 rounded-lg text-xs">
+                      <BookOpen className="w-3 h-3" />
+                      นำมา {tx.broughtCount} เล่ม ({tx.broughtCodes.join(', ') || '-'})
+                    </span>
+
+                    {tx.takenCodes.length > 0 && (
+                      <span className="text-[11px] bg-[#FAF5EE] text-[#7A4B30] border border-[#EADBCC] px-2 py-1 rounded-lg font-medium">
+                        แลกออก: <span className="font-mono font-bold">{tx.takenCodes.join(', ')}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="py-6 text-center text-xs text-[#8A7E74] bg-white/50 rounded-xl border border-dashed border-[#EADBCC]">
+            ยังไม่มีข้อมูล Transaction ในระบบ เมื่อมีผู้เข้าร่วมกิจกรรมนำหนังสือมาแลก ข้อมูลจะปรากฏที่นี่โดยอัตโนมัติ
+          </div>
+        )}
       </div>
 
       {/* 6. Bottom Card: สถิติความถี่การส่งต่อหนังสือ (Exchange Chains strictly from Google Sheet) */}

@@ -17,6 +17,7 @@ export interface Book {
   isbn?: string;
   status: BookStatus;
   source: BookSource;
+  transactionId?: string; // Associated transaction ID if brought in exchange
   ownerName?: string;
   ownerPhone?: string;
   ownerEmail?: string;
@@ -60,6 +61,8 @@ export interface TransactionRecord {
   booksTaken: string[]; // Codes of books taken (L... or U...)
   donatedCount: number;
   cancelledCount: number;
+  booksBroughtCount?: number; // จำนวนหนังสือที่นำมาร่วมกิจกรรมในรอบนี้
+  booksTakenCount?: number; // จำนวนหนังสือที่รับกลับไปในรอบนี้
 }
 
 export interface StaffAccount {

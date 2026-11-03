@@ -364,6 +364,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
     let donatedCount = 0;
     let cancelledCount = 0;
 
+    const txId = `TX-${Date.now().toString().slice(-6)}`;
     let highestU = 'U0';
 
     bookEntries.forEach((entry) => {
@@ -380,6 +381,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
           price: entry.price ?? 0,
           status: 'Not Match',
           source: 'User',
+          transactionId: txId,
           memberType: participant.memberType,
           coverImage: entry.coverImage,
           createdAt: now,
@@ -403,6 +405,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
           price: entry.price ?? 0,
           status: 'Available',
           source: 'Library',
+          transactionId: txId,
           memberType: participant.memberType,
           coverImage: entry.coverImage,
           createdAt: now,
@@ -421,6 +424,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
           price: entry.price ?? 0,
           status: 'Available',
           source: 'User',
+          transactionId: txId,
           memberType: participant.memberType,
           coverImage: entry.coverImage,
           createdAt: now,
@@ -444,13 +448,15 @@ export const KioskView: React.FC<KioskViewProps> = ({
     StorageService.commitUCodes(bookEntries.map((e) => e.code));
 
     const transactionRecord: TransactionRecord = {
-      id: `TX-${Date.now().toString().slice(-6)}`,
+      id: txId,
       timestamp: now,
       participant,
       booksBrought: broughtCodes,
       booksTaken: takenCodes,
       donatedCount,
       cancelledCount,
+      booksBroughtCount: broughtCodes.length,
+      booksTakenCount: takenCodes.length,
     };
 
     const currentBooks = StorageService.getBooks();
