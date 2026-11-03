@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Tag,
   FileText,
@@ -82,6 +82,22 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   );
   const [isSaved, setIsSaved] = useState(false);
   const [isSyncSuccess, setIsSyncSuccess] = useState(false);
+
+  useEffect(() => {
+    setCategories(settings.categories);
+    setExchangeTerms(settings.exchangeTerms);
+    setShowWelcomeShelf(settings.showWelcomeShelf);
+    setDeadStockDays(settings.deadStockThresholdDays);
+    if (settings.participationHistoryOptions && settings.participationHistoryOptions.length > 0) {
+      setParticipationOptions(settings.participationHistoryOptions);
+    }
+    if (settings.visitFrequencyOptions && settings.visitFrequencyOptions.length > 0) {
+      setFrequencyOptions(settings.visitFrequencyOptions);
+    }
+    if (settings.connectedSpreadsheetId) {
+      setSpreadsheetIdInput(settings.connectedSpreadsheetId);
+    }
+  }, [settings]);
 
   const codeStats = StorageService.getCodeStats();
 

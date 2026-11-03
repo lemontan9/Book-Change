@@ -546,14 +546,17 @@ export const KioskView: React.FC<KioskViewProps> = ({
     );
   });
 
-  const categoryOptions = [
-    'หนังสือทั่วไป',
-    'หนังสือเรียน',
-    'หนังสือเยาวชน',
-    'การ์ตูน',
-    'เรื่องสั้น',
-    'นวนิยาย',
-  ];
+  const categoryOptions =
+    settings.categories && settings.categories.length > 0
+      ? settings.categories
+      : [
+          'หนังสือทั่วไป',
+          'หนังสือเรียน',
+          'หนังสือเยาวชน',
+          'การ์ตูน',
+          'เรื่องสั้น',
+          'นวนิยาย',
+        ];
 
   const stepsList = [
     { num: 1, label: 'เงื่อนไข' },
@@ -653,8 +656,9 @@ export const KioskView: React.FC<KioskViewProps> = ({
               </div>
             </div>
 
-            {/* Section: หนังสือที่พร้อมแลกในขณะนี้ */}
-            <div className="pt-2">
+            {/* Section: หนังสือที่พร้อมแลกในขณะนี้ (ควบคุมด้วย showWelcomeShelf จากการตั้งค่า) */}
+            {settings.showWelcomeShelf !== false && (
+              <div className="pt-2">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
                 <div className="flex items-center gap-2">
                   <h2 className="text-base sm:text-lg font-bold text-[#263238] text-left">
@@ -802,7 +806,8 @@ export const KioskView: React.FC<KioskViewProps> = ({
                 <span>เลื่อนซ้าย-ขวาเพื่อดูหนังสือ ({homeAvailableBooks.length} เล่ม)</span>
                 <ChevronRight className="w-3.5 h-3.5" />
               </div>
-            </div>
+              </div>
+            )}
 
             {/* Primary Navy Button: เริ่มต้นการแลกเปลี่ยน */}
             <button
@@ -845,30 +850,40 @@ export const KioskView: React.FC<KioskViewProps> = ({
               เงื่อนไขการเข้าร่วมกิจกรรม
             </h2>
 
-            {/* White/Cream Content Box with 5 Rules */}
+            {/* White/Cream Content Box with Dynamic Rules from settings.exchangeTerms */}
             <div className="bg-white/80 border border-[#EADBCC] rounded-3xl p-6 sm:p-8 space-y-4 text-sm sm:text-base text-[#332D29] leading-relaxed shadow-xs text-left">
-              <p className="flex items-start gap-2">
-                <span>1.</span>
-                <span>หนังสือที่นำมาแลกต้องอยู่ในสภาพดี ไม่ฉีกขาด</span>
-              </p>
-              <p className="flex items-start gap-2">
-                <span>2.</span>
-                <span>สามารถแลกหนังสือได้ตามจำนวนที่นำมาเท่านั้น</span>
-              </p>
-              <p className="flex items-start gap-2">
-                <span>3.</span>
-                <span>หนังสือที่นำมาแลกแล้ว จะถือเป็นการส่งต่อให้ผู้อื่น ไม่สามารถขอคืนได้</span>
-              </p>
-              <p className="flex items-start gap-2">
-                <span>4.</span>
-                <span>หากรหัสหนังสือที่ท่านเลือกถูกผู้อื่นแลกไปแล้ว จะต้องเลือกรหัสใหม่</span>
-              </p>
-              <p className="flex items-start gap-2">
-                <span>5.</span>
-                <span>
-                  หนังสือที่ไม่ประสงค์จะแลกเปลี่ยน หรือแลกไม่ครบตามจำนวน สามารถระบุให้เป็น "หนังสือบริจาค" ได้
-                </span>
-              </p>
+              {(settings.exchangeTerms || '')
+                .split('\n')
+                .filter((line) => line.trim() !== '')
+                .map((line, idx) => {
+                  const numMatch = line.match(/^(\d+[\.\)]\s*)(.*)$/);
+                  const bulletMatch = line.match(/^([-•*]\s*)(.*)$/);
+                  if (numMatch) {
+                    return (
+                      <p key={idx} className="flex items-start gap-2.5">
+                        <span className="font-semibold text-[#7A4B30] shrink-0 min-w-[20px]">
+                          {numMatch[1]}
+                        </span>
+                        <span className="flex-1">{numMatch[2]}</span>
+                      </p>
+                    );
+                  }
+                  if (bulletMatch) {
+                    return (
+                      <p key={idx} className="flex items-start gap-2.5">
+                        <span className="font-semibold text-[#7A4B30] shrink-0 min-w-[16px]">
+                          {bulletMatch[1]}
+                        </span>
+                        <span className="flex-1">{bulletMatch[2]}</span>
+                      </p>
+                    );
+                  }
+                  return (
+                    <p key={idx} className="leading-relaxed">
+                      {line}
+                    </p>
+                  );
+                })}
             </div>
 
             {/* Primary Navy Button: ยืนยันรับทราบการเข้าร่วมกิจกรรม */}
