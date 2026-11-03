@@ -164,8 +164,6 @@ export const INITIAL_BOOKS: Book[] = [
     price: 250,
     status: 'Available',
     source: 'User',
-    ownerPhone: '081-456-7890',
-    ownerEmail: 'somchai@cmu.ac.th',
     memberType: 'CMU นักศึกษา',
     createdAt: '2026-08-25T14:30:00.000Z',
     exchangeCount: 3,
@@ -178,8 +176,6 @@ export const INITIAL_BOOKS: Book[] = [
     price: 395,
     status: 'Matched',
     source: 'User',
-    ownerPhone: '089-123-4567',
-    ownerEmail: 'jane.d@cmu.ac.th',
     memberType: 'CMU Staff',
     createdAt: '2026-09-02T16:00:00.000Z',
     matchedAt: '2026-09-18T10:15:00.000Z',
@@ -194,7 +190,6 @@ export const INITIAL_BOOKS: Book[] = [
     price: 150,
     status: 'Available',
     source: 'User',
-    ownerPhone: '086-987-6543',
     memberType: 'บุคคลทั่วไป/นักเรียน',
     createdAt: '2026-10-12T09:00:00.000Z',
     exchangeCount: 1,
@@ -207,7 +202,6 @@ export const INITIAL_BOOKS: Book[] = [
     price: 320,
     status: 'Available',
     source: 'User',
-    ownerPhone: '083-222-1144',
     memberType: 'CMU นักศึกษา',
     createdAt: '2026-10-18T15:20:00.000Z',
     exchangeCount: 1,
@@ -269,16 +263,26 @@ export class StorageService {
 
   static getBooks(): Book[] {
     const raw = localStorage.getItem(STORAGE_KEYS.BOOKS);
+    let books: Book[];
     if (!raw) {
-      const sorted = this.sortBooks(INITIAL_BOOKS);
-      localStorage.setItem(STORAGE_KEYS.BOOKS, JSON.stringify(sorted));
-      return sorted;
+      books = INITIAL_BOOKS;
+      localStorage.setItem(STORAGE_KEYS.BOOKS, JSON.stringify(this.sortBooks(INITIAL_BOOKS)));
+    } else {
+      try {
+        books = JSON.parse(raw);
+      } catch {
+        books = INITIAL_BOOKS;
+      }
     }
-    try {
-      return this.sortBooks(JSON.parse(raw));
-    } catch {
-      return this.sortBooks(INITIAL_BOOKS);
-    }
+    // Strictly sanitize legacy data to ensure no phone, email, or name exists
+    const cleaned = books.map((b) => {
+      const copy = { ...b };
+      delete copy.ownerPhone;
+      delete copy.ownerEmail;
+      delete copy.ownerName;
+      return copy;
+    });
+    return this.sortBooks(cleaned);
   }
 
   /**
@@ -424,7 +428,20 @@ export class StorageService {
     const raw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
     if (!raw) return [];
     try {
-      return JSON.parse(raw);
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return [];
+      return arr.map((t) => {
+        const p = { ...t.participant };
+        delete p.phone;
+        delete p.email;
+        delete p.firstName;
+        delete p.lastName;
+        delete p.fullName;
+        return {
+          ...t,
+          participant: p,
+        };
+      });
     } catch {
       return [];
     }

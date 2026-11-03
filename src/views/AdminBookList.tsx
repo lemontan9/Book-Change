@@ -65,8 +65,7 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
       const matchSearch =
         b.code.toLowerCase().includes(q) ||
         b.title.toLowerCase().includes(q) ||
-        (b.ownerName && b.ownerName.toLowerCase().includes(q)) ||
-        (b.ownerPhone && b.ownerPhone.includes(q)) ||
+        (b.memberType && b.memberType.toLowerCase().includes(q)) ||
         b.category.toLowerCase().includes(q);
 
       const matchStatus = statusFilter === 'all' || b.status === statusFilter;
@@ -164,11 +163,10 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
     if (b.source === 'Library') {
       return 'ส่วนกลาง (L)';
     }
-    const phone = b.ownerPhone ? b.ownerPhone.replace(/\D/g, '') : '';
-    if (phone.length >= 3) {
-      return `User (${phone.slice(0, 3)}-xxx)`;
+    if (b.memberType) {
+      return `User (${b.memberType})`;
     }
-    return 'User (081-xxx)';
+    return 'ผู้แลก (U)';
   };
 
   return (
@@ -598,9 +596,9 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                 <div className="text-xs text-[#717171]">
                   แหล่งที่มา: <span className="font-medium text-[#263238]">{viewingBook.source === 'Library' ? 'ส่วนกลาง (L)' : 'ผู้แลก (U)'}</span>
                 </div>
-                {(viewingBook.ownerName || viewingBook.ownerPhone) && (
+                {viewingBook.memberType && (
                   <div className="text-xs text-[#717171]">
-                    ผู้แลก: <span className="font-medium text-[#263238]">{viewingBook.ownerName || viewingBook.ownerPhone}</span>
+                    กลุ่มผู้แลก: <span className="font-medium text-[#263238]">{viewingBook.memberType}</span>
                   </div>
                 )}
                 <div className="text-xs text-[#717171]">
