@@ -223,17 +223,8 @@ export const MockBookCover: React.FC<MockBookCoverProps> = ({
         style={{ backgroundColor: theme.borderCol }}
       />
 
-      {/* Top Header: Tag */}
-      <div className="w-full pl-2 pr-1 flex items-center justify-end z-10">
-        {category && (
-          <span
-            style={{ color: theme.subColor }}
-            className="text-[9px] font-medium truncate max-w-[80px] opacity-80"
-          >
-            {category.replace('หนังสือ', '')}
-          </span>
-        )}
-      </div>
+      {/* Top Header spacer */}
+      <div className="w-full min-h-[10px] z-10" />
 
       {/* Center: Book Title (Taking title as cover text as requested) */}
       <div className="w-full pl-2.5 pr-1.5 my-auto flex flex-col items-center justify-center text-center z-10">

@@ -10,7 +10,7 @@ export type MemberType =
 
 export interface Book {
   id: string; // Internal unique ID
-  code: string; // e.g. L1, L2, U101, U102
+  code: string; // Primary key ของ sheet Books (เช่น L1, L2, U101 - ห้ามซ้ำ)
   title: string;
   category: string;
   price: number;
@@ -18,6 +18,7 @@ export interface Book {
   status: BookStatus;
   source: BookSource;
   transactionId?: string; // Associated transaction ID if brought in exchange
+  matchedTransactionId?: string; // รหัส Transaction ที่หนังสือเล่มนี้ถูก Match (Transaction ซ้ำได้)
   ownerName?: string;
   ownerPhone?: string;
   ownerEmail?: string;
@@ -54,15 +55,17 @@ export interface KioskBookEntry {
 }
 
 export interface TransactionRecord {
-  id: string;
+  id: string; // Primary key ของ sheet Transactions (ห้ามซ้ำ เช่น TX-153545)
   timestamp: string;
   participant: ParticipantInfo;
+  totalBroughtCount: number; // นำหนังสือมาแลกจำนวนกี่รายการ เช่น 5 เล่ม
+  matchedCount: number; // Match = X เล่ม
+  donatedCount: number; // Donate = Y เล่ม
+  cancelledCount: number; // Cancelled = Z เล่ม
   booksBrought: string[]; // Codes of books brought (U...)
   booksTaken: string[]; // Codes of books taken (L... or U...)
-  donatedCount: number;
-  cancelledCount: number;
-  booksBroughtCount?: number; // จำนวนหนังสือที่นำมาร่วมกิจกรรมในรอบนี้
-  booksTakenCount?: number; // จำนวนหนังสือที่รับกลับไปในรอบนี้
+  booksBroughtCount?: number; // alias for backwards compatibility
+  booksTakenCount?: number;
 }
 
 export interface StaffAccount {

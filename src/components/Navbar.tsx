@@ -69,7 +69,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             {isAdminLoggedIn ? (
               <div className="flex items-center gap-1.5 bg-[#F5E2CC] px-2.5 py-1 rounded-full text-xs font-medium text-[#7A4B30] border border-[#E0D2BE]">
                 <ShieldCheck className="w-3.5 h-3.5 text-[#7A4B30]" />
-                <span className="max-w-[70px] truncate">{adminUsername || 'Admin'}</span>
+                <span className="max-w-[80px] sm:max-w-[120px] truncate">{adminUsername || 'Admin'}</span>
                 <button
                   onClick={onAdminLogout}
                   className="ml-1 text-[#8A7E74] hover:text-[#D32F2F] p-0.5 cursor-pointer"
@@ -78,7 +78,18 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <LogOut className="w-3.5 h-3.5" />
                 </button>
               </div>
-            ) : null}
+            ) : (
+              <button
+                type="button"
+                onClick={onOpenAdminLogin}
+                className="flex items-center gap-1.5 bg-[#EFE5D6] hover:bg-[#E5D7C3] active:scale-95 text-[#7A4B30] border border-[#E0D2BE] px-3 py-1.5 rounded-full text-xs font-semibold shadow-2xs transition-all cursor-pointer"
+                title="เข้าสู่ระบบเจ้าหน้าที่ หรือเชื่อมต่อ Super User (Google)"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-[#7A4B30]" />
+                <span className="hidden sm:inline">เข้าสู่ระบบ / เชื่อมต่อ Super User</span>
+                <span className="sm:hidden">เข้าสู่ระบบ</span>
+              </button>
+            )}
           </div>
         </div>
       </header>

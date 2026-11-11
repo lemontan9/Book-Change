@@ -16,6 +16,7 @@ export const BOOK_HEADERS = [
   'ExchangeCount',
   'TransactionId',
   'ISBN',
+  'MatchedTransactionId',
 ];
 
 export const TRANSACTION_HEADERS = [
@@ -24,12 +25,12 @@ export const TRANSACTION_HEADERS = [
   'ParticipationHistory',
   'VisitFrequencyThisYear',
   'MemberType',
-  'BooksBrought',
-  'BooksTaken',
+  'TotalBroughtCount',
+  'MatchedCount',
   'DonatedCount',
   'CancelledCount',
-  'BooksBroughtCount',
-  'BooksTakenCount',
+  'BooksBrought',
+  'BooksTaken',
 ];
 
 /**
@@ -70,9 +71,9 @@ export async function createBookSwapSpreadsheet(accessToken: string): Promise<st
 }
 
 export async function writeHeaders(accessToken: string, spreadsheetId: string): Promise<void> {
-  // Write Books headers (A1:O1, 15 columns - includes TransactionId & ISBN, no phone/email for PDPA)
+  // Write Books headers (A1:P1, 16 columns - Code is primary key, includes MatchedTransactionId)
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:O1?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:P1?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {
@@ -85,7 +86,7 @@ export async function writeHeaders(accessToken: string, spreadsheetId: string): 
     }
   );
 
-  // Write Transactions headers (A1:K1, 11 columns - includes BooksBroughtCount & BooksTakenCount)
+  // Write Transactions headers (A1:K1, 11 columns - TransactionId is primary key, includes TotalBroughtCount, MatchedCount, DonatedCount, CancelledCount)
   await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A1:K1?valueInputOption=USER_ENTERED`,
     {
@@ -122,10 +123,11 @@ export async function appendBookToSheet(
     book.exchangeCount || 1,
     book.transactionId || '',
     book.isbn || '',
+    book.matchedTransactionId || '',
   ];
 
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A:O:append?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A:P:append?valueInputOption=USER_ENTERED`,
     {
       method: 'POST',
       headers: {
@@ -144,8 +146,8 @@ export async function appendTransactionToSheet(
   spreadsheetId: string,
   t: TransactionRecord
 ): Promise<void> {
-  const broughtCount = t.booksBroughtCount !== undefined ? t.booksBroughtCount : t.booksBrought.length;
-  const takenCount = t.booksTakenCount !== undefined ? t.booksTakenCount : t.booksTaken.length;
+  const totalBrought = t.totalBroughtCount !== undefined ? t.totalBroughtCount : (t.booksBroughtCount ?? (t.booksBrought.length + (t.cancelledCount || 0)));
+  const matched = t.matchedCount !== undefined ? t.matchedCount : (t.booksTakenCount ?? t.booksTaken.length);
 
   const row = [
     t.id,
@@ -153,12 +155,12 @@ export async function appendTransactionToSheet(
     t.participant.participationHistory || '-',
     t.participant.visitFrequencyThisYear || '-',
     t.participant.memberType,
-    t.booksBrought.join(', '),
-    t.booksTaken.join(', '),
+    totalBrought,
+    matched,
     t.donatedCount,
     t.cancelledCount,
-    broughtCount,
-    takenCount,
+    t.booksBrought.join(', '),
+    t.booksTaken.join(', '),
   ];
 
   await fetch(
@@ -322,9 +324,18 @@ function getColumnIndexMap(headerRow: string[] | undefined, defaultHeaders: stri
   const normalize = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const normalizedHeaders = headerRow.map(normalize);
 
+  const aliases: Record<string, string[]> = {
+    TotalBroughtCount: ['totalbroughtcount', 'booksbroughtcount', 'broughtcount', 'totalbrought'],
+    MatchedCount: ['matchedcount', 'matchcount', 'bookstakencount', 'takencount'],
+    MatchedTransactionId: ['matchedtransactionid', 'matchedtransaction', 'matchtransactionid', 'matchtxid'],
+  };
+
   defaultHeaders.forEach((name) => {
     const target = normalize(name);
-    const foundIdx = normalizedHeaders.findIndex((h) => h === target);
+    let foundIdx = normalizedHeaders.findIndex((h) => h === target);
+    if (foundIdx === -1 && aliases[name]) {
+      foundIdx = normalizedHeaders.findIndex((h) => aliases[name].includes(h));
+    }
     if (foundIdx !== -1) {
       map[name] = foundIdx;
     }
@@ -344,7 +355,7 @@ export async function fetchBooksFromSheet(
   if (accessToken) {
     try {
       const res = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:O2000`,
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:P2000`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
         }
@@ -378,25 +389,38 @@ export async function fetchBooksFromSheet(
   }
 
   const col = getColumnIndexMap(headerRow, BOOK_HEADERS);
+  const seenCodes = new Set<string>();
+  const parsedBooks: Book[] = [];
 
-  return rows.map((r, idx) => ({
-    id: `sheet-${r[col.Code] || idx}`,
-    code: r[col.Code] || `L${idx + 1}`,
-    title: r[col.Title] || 'Untitled',
-    category: r[col.Category] || 'หนังสือทั่วไป',
-    price: Number(r[col.Price]) || 0,
-    status: (r[col.Status] as any) || 'Available',
-    source: (r[col.Source] as any) || 'Library',
-    memberType: r[col.MemberType] || undefined,
-    driveFileId: r[col.DriveFileId] || undefined,
-    coverImage: r[col.CoverImage] || undefined,
-    createdAt: r[col.CreatedAt] || new Date().toISOString(),
-    matchedAt: r[col.MatchedAt] || undefined,
-    matchedWithCode: r[col.MatchedWithCode] || undefined,
-    exchangeCount: Number(r[col.ExchangeCount]) || 1,
-    transactionId: r[col.TransactionId] || undefined,
-    isbn: r[col.ISBN] || undefined,
-  }));
+  rows.forEach((r, idx) => {
+    const rawCode = (r[col.Code] || `L${idx + 1}`).trim().toUpperCase();
+    if (seenCodes.has(rawCode)) {
+      return; // Code is primary key (ห้ามซ้ำ)
+    }
+    seenCodes.add(rawCode);
+
+    parsedBooks.push({
+      id: `sheet-${rawCode}`,
+      code: rawCode,
+      title: r[col.Title] || 'Untitled',
+      category: r[col.Category] || 'หนังสือทั่วไป',
+      price: Number(r[col.Price]) || 0,
+      status: (r[col.Status] as any) || 'Available',
+      source: (r[col.Source] as any) || 'Library',
+      memberType: r[col.MemberType] || undefined,
+      driveFileId: r[col.DriveFileId] || undefined,
+      coverImage: r[col.CoverImage] || undefined,
+      createdAt: r[col.CreatedAt] || new Date().toISOString(),
+      matchedAt: r[col.MatchedAt] || undefined,
+      matchedWithCode: r[col.MatchedWithCode] || undefined,
+      exchangeCount: Number(r[col.ExchangeCount]) || 1,
+      transactionId: r[col.TransactionId] || undefined,
+      isbn: r[col.ISBN] || undefined,
+      matchedTransactionId: r[col.MatchedTransactionId] || undefined,
+    });
+  });
+
+  return parsedBooks;
 }
 
 export async function fetchTransactionsFromSheet(
@@ -443,38 +467,54 @@ export async function fetchTransactionsFromSheet(
   }
 
   const col = getColumnIndexMap(headerRow, TRANSACTION_HEADERS);
+  const seenTxIds = new Set<string>();
+  const parsedRecords: TransactionRecord[] = [];
 
-  return rows.map((r, idx) => {
+  rows.forEach((r, idx) => {
+    const rawId = (r[col.TransactionId] || `tx-${idx + 1}`).trim();
+    if (seenTxIds.has(rawId)) {
+      return; // TransactionId is primary key (ห้ามซ้ำ)
+    }
+    seenTxIds.add(rawId);
+
     const broughtStr = r[col.BooksBrought] || '';
     const takenStr = r[col.BooksTaken] || '';
     const booksBrought = broughtStr ? broughtStr.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
     const booksTaken = takenStr ? takenStr.split(',').map((s: string) => s.trim()).filter(Boolean) : [];
 
-    const broughtCountVal = r[col.BooksBroughtCount];
-    const takenCountVal = r[col.BooksTakenCount];
-    const booksBroughtCount = broughtCountVal !== undefined && broughtCountVal !== '' && !isNaN(Number(broughtCountVal))
-      ? Number(broughtCountVal)
-      : booksBrought.length;
-    const booksTakenCount = takenCountVal !== undefined && takenCountVal !== '' && !isNaN(Number(takenCountVal))
-      ? Number(takenCountVal)
+    const donatedCount = Number(r[col.DonatedCount]) || 0;
+    const cancelledCount = Number(r[col.CancelledCount]) || 0;
+
+    const matchedCountVal = r[col.MatchedCount];
+    const matchedCount = matchedCountVal !== undefined && matchedCountVal !== '' && !isNaN(Number(matchedCountVal))
+      ? Number(matchedCountVal)
       : booksTaken.length;
 
-    return {
-      id: r[col.TransactionId] || `tx-${idx + 1}`,
+    const totalBroughtVal = r[col.TotalBroughtCount];
+    const totalBroughtCount = totalBroughtVal !== undefined && totalBroughtVal !== '' && !isNaN(Number(totalBroughtVal))
+      ? Number(totalBroughtVal)
+      : (matchedCount + donatedCount + cancelledCount || booksBrought.length);
+
+    parsedRecords.push({
+      id: rawId,
       timestamp: r[col.Timestamp] || new Date().toISOString(),
       participant: {
         participationHistory: r[col.ParticipationHistory] || '',
         visitFrequencyThisYear: r[col.VisitFrequencyThisYear] || '',
         memberType: r[col.MemberType] || 'บุคคลทั่วไป/นักเรียน',
       },
+      totalBroughtCount,
+      matchedCount,
+      donatedCount,
+      cancelledCount,
       booksBrought,
       booksTaken,
-      donatedCount: Number(r[col.DonatedCount]) || 0,
-      cancelledCount: Number(r[col.CancelledCount]) || 0,
-      booksBroughtCount,
-      booksTakenCount,
-    };
+      booksBroughtCount: totalBroughtCount,
+      booksTakenCount: matchedCount,
+    });
   });
+
+  return parsedRecords;
 }
 
 export async function syncAllBooksToSheet(
@@ -482,7 +522,7 @@ export async function syncAllBooksToSheet(
   spreadsheetId: string,
   books: Book[]
 ): Promise<void> {
-  // Clear and rewrite books tab header (A1:O1, 15 columns)
+  // Clear and rewrite books tab header (A1:P1, 16 columns)
   await writeHeaders(accessToken, spreadsheetId);
 
   // Clear existing rows in Books tab to prevent leftover ghost columns from previous versions
@@ -501,7 +541,16 @@ export async function syncAllBooksToSheet(
     console.warn('Clear books sheet range non-fatal:', e);
   }
 
-  const rows = books.map((b) => [
+  // Deduplicate by Code (Primary Key of Books)
+  const uniqueBooksMap = new Map<string, Book>();
+  books.forEach((b) => {
+    const key = (b.code || '').trim().toUpperCase();
+    if (key && !uniqueBooksMap.has(key)) {
+      uniqueBooksMap.set(key, b);
+    }
+  });
+
+  const rows = Array.from(uniqueBooksMap.values()).map((b) => [
     b.code,
     b.title,
     b.category,
@@ -517,12 +566,13 @@ export async function syncAllBooksToSheet(
     b.exchangeCount || 1,
     b.transactionId || '',
     b.isbn || '',
+    b.matchedTransactionId || '',
   ]);
 
   if (rows.length === 0) return;
 
   await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:O${rows.length + 1}?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:P${rows.length + 1}?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
       headers: {
@@ -557,19 +607,37 @@ export async function syncAllTransactionsToSheet(
     console.warn('Clear transactions sheet range non-fatal:', e);
   }
 
-  const rows = transactions.map((t) => [
-    t.id,
-    t.timestamp,
-    t.participant.participationHistory || '-',
-    t.participant.visitFrequencyThisYear || '-',
-    t.participant.memberType,
-    t.booksBrought.join(', '),
-    t.booksTaken.join(', '),
-    t.donatedCount,
-    t.cancelledCount,
-    t.booksBroughtCount !== undefined ? t.booksBroughtCount : t.booksBrought.length,
-    t.booksTakenCount !== undefined ? t.booksTakenCount : t.booksTaken.length,
-  ]);
+  // Deduplicate transactions by TransactionId (Primary key of Transactions - ห้ามซ้ำ)
+  const uniqueTxMap = new Map<string, TransactionRecord>();
+  transactions.forEach((t) => {
+    const key = (t.id || '').trim();
+    if (key && !uniqueTxMap.has(key)) {
+      uniqueTxMap.set(key, t);
+    }
+  });
+
+  const rows = Array.from(uniqueTxMap.values()).map((t) => {
+    const totalBrought = t.totalBroughtCount !== undefined
+      ? t.totalBroughtCount
+      : (t.booksBroughtCount ?? (t.booksBrought.length + (t.cancelledCount || 0)));
+    const matched = t.matchedCount !== undefined
+      ? t.matchedCount
+      : (t.booksTakenCount ?? t.booksTaken.length);
+
+    return [
+      t.id,
+      t.timestamp,
+      t.participant.participationHistory || '-',
+      t.participant.visitFrequencyThisYear || '-',
+      t.participant.memberType,
+      totalBrought,
+      matched,
+      t.donatedCount,
+      t.cancelledCount,
+      t.booksBrought.join(', '),
+      t.booksTaken.join(', '),
+    ];
+  });
 
   if (rows.length === 0) return;
 

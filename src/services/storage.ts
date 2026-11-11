@@ -445,18 +445,47 @@ export class StorageService {
     try {
       const arr = JSON.parse(raw);
       if (!Array.isArray(arr)) return [];
-      return arr.map((t) => {
+      const seen = new Set<string>();
+      const result: TransactionRecord[] = [];
+
+      arr.forEach((t) => {
+        const id = (t.id || '').trim();
+        if (!id || seen.has(id)) return; // Guarantee primary key uniqueness (ห้ามซ้ำ)
+        seen.add(id);
+
         const p = { ...t.participant };
         delete p.phone;
         delete p.email;
         delete p.firstName;
         delete p.lastName;
         delete p.fullName;
-        return {
+
+        const booksBrought = Array.isArray(t.booksBrought) ? t.booksBrought : [];
+        const booksTaken = Array.isArray(t.booksTaken) ? t.booksTaken : [];
+        const donatedCount = Number(t.donatedCount) || 0;
+        const cancelledCount = Number(t.cancelledCount) || 0;
+        const matchedCount = t.matchedCount !== undefined ? Number(t.matchedCount) : booksTaken.length;
+        const totalBroughtCount =
+          t.totalBroughtCount !== undefined
+            ? Number(t.totalBroughtCount)
+            : matchedCount + donatedCount + cancelledCount || booksBrought.length;
+
+        result.push({
           ...t,
+          id,
           participant: p,
-        };
+          totalBroughtCount,
+          matchedCount,
+          donatedCount,
+          cancelledCount,
+          booksBrought,
+          booksTaken,
+          booksBroughtCount: totalBroughtCount,
+          booksTakenCount: matchedCount,
+        });
       });
+
+      return result;
     } catch {
       return [];
     }
@@ -464,11 +493,27 @@ export class StorageService {
 
   static saveTransaction(t: TransactionRecord): void {
     const all = this.getTransactions();
-    all.unshift(t);
-    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(all));
+    // TransactionId ห้ามซ้ำ เป็น Primary Key
+    const filtered = all.filter((item) => item.id !== t.id);
+    filtered.unshift(t);
+    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(filtered));
     // Immediately register all involved codes permanently
     if (t.booksBrought) this.registerUsedCodes(t.booksBrought);
     if (t.booksTaken) this.registerUsedCodes(t.booksTaken);
+  }
+
+  static saveTransactions(list: TransactionRecord[]): void {
+    const seen = new Set<string>();
+    const deduplicated: TransactionRecord[] = [];
+    list.forEach((t) => {
+      const id = (t.id || '').trim();
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      deduplicated.push(t);
+      if (t.booksBrought) this.registerUsedCodes(t.booksBrought);
+      if (t.booksTaken) this.registerUsedCodes(t.booksTaken);
+    });
+    localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(deduplicated));
   }
 
   /**
@@ -576,7 +621,7 @@ export class StorageService {
    */
   static exportBooksToExcel(books: Book[]): void {
     const headers = [
-      'รหัสหนังสือ',
+      'รหัสหนังสือ (Code - Primary Key)',
       'ชื่อเรื่อง',
       'หมวดหมู่',
       'ราคา (บาท)',
@@ -587,8 +632,9 @@ export class StorageService {
       'วันที่แลกเปลี่ยน',
       'แลกกับรหัส',
       'จำนวนรอบแลกเปลี่ยน',
-      'รหัสธุรกรรม (TransactionId)',
+      'รหัสธุรกรรมนำเข้า (TransactionId)',
       'ISBN',
+      'รหัส Transaction ที่ Match (MatchedTransactionId)',
     ];
 
     const rows = books.map((b) => [
@@ -605,6 +651,7 @@ export class StorageService {
       b.exchangeCount || 1,
       b.transactionId || '-',
       b.isbn || '-',
+      b.matchedTransactionId || '-',
     ]);
 
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');

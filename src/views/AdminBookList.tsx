@@ -10,6 +10,8 @@ import {
   ChevronDown,
   ChevronsUpDown,
   ArrowUpDown,
+  UploadCloud,
+  RefreshCw,
 } from 'lucide-react';
 import type { Book, SystemSettings } from '../types';
 import { StorageService } from '../services/storage';
@@ -38,6 +40,7 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [sortColumn, setSortColumn] = useState<SortColumn>('code');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [viewingBook, setViewingBook] = useState<Book | null>(null);
@@ -261,6 +264,31 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
               </input>
             </div>
 
+            {/* Sync to Google Sheet Button */}
+            {onSyncToGoogle && (
+              <button
+                type="button"
+                disabled={isSyncing}
+                onClick={async () => {
+                  setIsSyncing(true);
+                  try {
+                    await onSyncToGoogle();
+                  } finally {
+                    setIsSyncing(false);
+                  }
+                }}
+                className="bg-[#E8F5E9] hover:bg-[#C8E6C9] text-[#1E5C3B] border border-[#A2D4BB] rounded-xl px-3.5 py-2 text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-50"
+                title="ซิงค์ข้อมูลหนังสือทั้งหมดขึ้น Google Sheet ทันที"
+              >
+                {isSyncing ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <UploadCloud className="w-3.5 h-3.5 text-[#2E7D32]" />
+                )}
+                <span>{isSyncing ? 'กำลังซิงค์...' : 'ซิงค์ขึ้น Google Sheet'}</span>
+              </button>
+            )}
+
             {/* Export .xls Button */}
             <button
               type="button"
@@ -403,9 +431,19 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                             Available
                           </span>
                         ) : isMatched ? (
-                          <span className="bg-[#FFB7A5] text-[#8B3A2B] font-semibold text-xs px-3.5 py-1 rounded-full inline-block shadow-2xs">
-                            Matched
-                          </span>
+                          <div className="inline-flex flex-col items-center gap-1">
+                            <span className="bg-[#FFB7A5] text-[#8B3A2B] font-semibold text-xs px-3.5 py-1 rounded-full inline-block shadow-2xs">
+                              Matched
+                            </span>
+                            {book.matchedTransactionId && (
+                              <span
+                                className="font-mono text-[10px] text-[#2A3B4C] bg-[#F0F4F8] border border-[#D0DCE5] px-1.5 py-0.5 rounded font-medium"
+                                title="รหัส Transaction ที่ Match รายการนี้"
+                              >
+                                {book.matchedTransactionId}
+                              </span>
+                            )}
+                          </div>
                         ) : (
                           <span className="bg-[#EADBCC] text-[#7A4B30] font-semibold text-xs px-3.5 py-1 rounded-full inline-block">
                             {book.status}
@@ -617,6 +655,31 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                     </span>
                   )}
                 </div>
+
+                {viewingBook.matchedTransactionId && (
+                  <div className="text-xs text-[#717171]">
+                    Transaction ที่ Match:{' '}
+                    <span className="font-mono font-bold text-[#2A3B4C] bg-[#F5F7FA] border border-[#E8ECF2] px-1.5 py-0.5 rounded">
+                      {viewingBook.matchedTransactionId}
+                    </span>
+                  </div>
+                )}
+                {viewingBook.matchedWithCode && (
+                  <div className="text-xs text-[#717171]">
+                    แลกคู่กับรหัส:{' '}
+                    <span className="font-mono font-bold text-[#7A4B30]">
+                      {viewingBook.matchedWithCode}
+                    </span>
+                  </div>
+                )}
+                {viewingBook.matchedAt && (
+                  <div className="text-[11px] text-[#8A7E74]">
+                    เวลาที่แลก:{' '}
+                    <span>
+                      {new Date(viewingBook.matchedAt).toLocaleString('th-TH')}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 

@@ -197,6 +197,14 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   };
 
   const handleSaveSettings = async () => {
+    if (!isSuperAdmin) {
+      setSyncStatusMsg({
+        type: 'error',
+        text: `ไม่อนุญาต: เจ้าหน้าที่ทั่วไปไม่มีสิทธิ์แก้ไขการตั้งค่าระบบ (สงวนสิทธิ์เฉพาะ Super Admin: ${ALLOWED_GOOGLE_ADMIN_EMAIL} เท่านั้น)`,
+      });
+      return;
+    }
+
     setIsSyncing(true);
     setSyncStatusMsg(null);
 
@@ -437,34 +445,45 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
 
         {/* Action Buttons: ซิงค์ไป Google Sheet + บันทึกการตั้งค่า */}
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleSyncCurrentBooksToGoogle}
-            disabled={isSyncing}
-            className="flex items-center gap-1.5 bg-[#2A3B4C] hover:bg-[#1E2B38] active:scale-[0.98] disabled:opacity-60 text-white px-4 sm:px-5 py-2.5 rounded-xl text-xs sm:text-sm font-medium shadow-xs transition-all cursor-pointer tracking-tight"
-          >
-            {isSyncing ? (
-              <>
-                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                <span>กำลังซิงค์...</span>
-              </>
-            ) : isSyncSuccess ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-emerald-300" />
-                <span>ซิงค์สำเร็จแล้ว</span>
-              </>
-            ) : (
-              <>
-                <Cloud className="w-3.5 h-3.5 text-[#9ED8EB]" />
-                <span>ซิงค์ไป Google Sheet</span>
-              </>
-            )}
-          </button>
+          {isSuperAdmin && (
+            <button
+              type="button"
+              onClick={handleSyncCurrentBooksToGoogle}
+              disabled={isSyncing}
+              className="flex items-center gap-1.5 bg-[#2A3B4C] hover:bg-[#1E2B38] active:scale-[0.98] disabled:opacity-60 text-white px-4 sm:px-5 py-2.5 rounded-xl text-xs sm:text-sm font-medium shadow-xs transition-all cursor-pointer tracking-tight"
+            >
+              {isSyncing ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>กำลังซิงค์...</span>
+                </>
+              ) : isSyncSuccess ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-300" />
+                  <span>ซิงค์สำเร็จแล้ว</span>
+                </>
+              ) : (
+                <>
+                  <Cloud className="w-3.5 h-3.5 text-[#9ED8EB]" />
+                  <span>ซิงค์ไป Google Sheet</span>
+                </>
+              )}
+            </button>
+          )}
           <button
             type="button"
             onClick={handleSaveSettings}
-            disabled={isSyncing}
-            className="flex items-center gap-1.5 px-4 sm:px-5 py-2.5 bg-[#6A8852] hover:bg-[#5A7446] active:scale-[0.98] disabled:opacity-75 text-white font-medium text-xs sm:text-sm rounded-xl shadow-xs transition-all cursor-pointer tracking-tight"
+            disabled={isSyncing || !isSuperAdmin}
+            title={
+              !isSuperAdmin
+                ? `เฉพาะ Super Admin (${ALLOWED_GOOGLE_ADMIN_EMAIL}) เท่านั้นที่มีสิทธิ์บันทึกการตั้งค่า`
+                : undefined
+            }
+            className={`flex items-center gap-1.5 px-4 sm:px-5 py-2.5 active:scale-[0.98] disabled:opacity-60 text-white font-medium text-xs sm:text-sm rounded-xl shadow-xs transition-all tracking-tight ${
+              isSuperAdmin
+                ? 'bg-[#6A8852] hover:bg-[#5A7446] cursor-pointer'
+                : 'bg-[#9E9E9E] cursor-not-allowed'
+            }`}
           >
             {isSyncing ? (
               <>
@@ -481,6 +500,11 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
                 <Check className="w-4 h-4 text-emerald-200" />
                 <span>บันทึกข้อมูลแล้ว</span>
               </>
+            ) : !isSuperAdmin ? (
+              <>
+                <Lock className="w-4 h-4" />
+                <span>บันทึกข้อมูล (ล็อก)</span>
+              </>
             ) : (
               <>
                 <Save className="w-4 h-4" />
@@ -490,6 +514,19 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Read-Only Notice for General Staff */}
+      {!isSuperAdmin && (
+        <div className="bg-[#FFF8E1] border border-[#FFE082] rounded-2xl p-4 text-xs text-[#8D6E63] flex items-start sm:items-center gap-3 shadow-xs">
+          <Lock className="w-5 h-5 text-[#F57C00] shrink-0 mt-0.5 sm:mt-0" />
+          <div className="space-y-0.5">
+            <div className="font-bold text-[#E65100]">โหมดสิทธิ์เจ้าหน้าที่ทั่วไป (Read-Only)</div>
+            <div className="text-[#6D4C41]">
+              เจ้าหน้าที่ทั่วไปสามารถดูข้อมูลสถิติใน Dashboard และ Book List ได้ตามปกติ แต่ไม่มีสิทธิ์แก้ไขการตั้งค่าระบบ หรือสร้าง Google Sheet รายการใหม่ (สิทธิ์การตั้งค่าสงวนไว้สำหรับ Super Admin: {ALLOWED_GOOGLE_ADMIN_EMAIL} เท่านั้น)
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-4">
         {/* Google Sheets Card (Restricted strictly to lemontan9@gmail.com) */}
@@ -649,35 +686,35 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
               <span className="text-[10px] bg-[#E8F5E9] text-[#2E7D32] px-2 py-0.5 rounded-full font-medium">อัปเดตล่าสุด</span>
             </div>
             
-            <div className="space-y-1 text-[10.5px]">
+            <div className="space-y-2 text-[10.5px]">
               <div>
-                <span className="font-semibold text-[#263238]">ชีต "Books" (15 คอลัมน์): </span>
-                <span className="text-[#607D8B] font-mono text-[10px]">
-                  Code, Title, Category, Price, Status, Source, MemberType, DriveFileId, CoverImage, CreatedAt, MatchedAt, MatchedWithCode, ExchangeCount, 
-                </span>
-                <span className="inline-flex gap-1 ml-1">
-                  <span className="bg-[#FFF3E0] text-[#E65100] border border-[#FFE082] px-1.5 py-0.2 rounded font-mono font-semibold text-[9.5px]">
-                    +TransactionId
+                <div className="font-semibold text-[#263238] flex items-center gap-1.5 flex-wrap">
+                  <span>ชีต "Books" (16 คอลัมน์):</span>
+                  <span className="bg-[#E8F5E9] text-[#2E7D32] border border-[#4CAF4F]/30 px-1.5 py-0.2 rounded font-mono font-semibold text-[9.5px]">
+                    Code = Primary Key (ห้ามซ้ำ)
                   </span>
-                  <span className="bg-[#FFF3E0] text-[#E65100] border border-[#FFE082] px-1.5 py-0.2 rounded font-mono font-semibold text-[9.5px]">
-                    +ISBN
+                  <span className="bg-[#E3F2FD] text-[#0D47A1] border border-[#90CAF9] px-1.5 py-0.2 rounded font-mono font-semibold text-[9.5px]">
+                    MatchedTransactionId = คอลัมน์ P (ซ้ำได้)
                   </span>
-                </span>
+                </div>
+                <div className="text-[#607D8B] font-mono text-[9.5px] mt-1 leading-relaxed">
+                  A:Code, B:Title, C:Category, D:Price, E:Status, F:Source, G:MemberType, H:DriveFileId, I:CoverImage, J:CreatedAt, K:MatchedAt, L:MatchedWithCode, M:ExchangeCount, N:TransactionId, O:ISBN, P:MatchedTransactionId
+                </div>
               </div>
 
               <div>
-                <span className="font-semibold text-[#263238]">ชีต "Transactions" (11 คอลัมน์): </span>
-                <span className="text-[#607D8B] font-mono text-[10px]">
-                  TransactionId, Timestamp, ParticipationHistory, VisitFrequencyThisYear, MemberType, BooksBrought, BooksTaken, DonatedCount, CancelledCount, 
-                </span>
-                <span className="inline-flex gap-1 ml-1">
-                  <span className="bg-[#E3F2FD] text-[#0D47A1] border border-[#90CAF9] px-1.5 py-0.2 rounded font-mono font-semibold text-[9.5px]">
-                    +BooksBroughtCount
+                <div className="font-semibold text-[#263238] flex items-center gap-1.5 flex-wrap">
+                  <span>ชีต "Transactions" (11 คอลัมน์):</span>
+                  <span className="bg-[#E8F5E9] text-[#2E7D32] border border-[#4CAF4F]/30 px-1.5 py-0.2 rounded font-mono font-semibold text-[9.5px]">
+                    TransactionId = Primary Key (ห้ามซ้ำ)
                   </span>
-                  <span className="bg-[#E3F2FD] text-[#0D47A1] border border-[#90CAF9] px-1.5 py-0.2 rounded font-mono font-semibold text-[9.5px]">
-                    +BooksTakenCount
-                  </span>
-                </span>
+                </div>
+                <div className="text-[#607D8B] font-mono text-[9.5px] mt-1 leading-relaxed">
+                  A:TransactionId, B:Timestamp, C:ParticipationHistory, D:VisitFrequencyThisYear, E:MemberType, F:TotalBroughtCount, G:MatchedCount, H:DonatedCount, I:CancelledCount, J:BooksBrought, K:BooksTaken
+                </div>
+                <div className="text-[10px] text-[#7A4B30] mt-1 font-medium">
+                  • บันทึกสถิติครบถ้วน: นำมากี่เล่ม (TotalBrought), Match = X, Donate = Y, Cancelled = Z
+                </div>
               </div>
             </div>
           </div>

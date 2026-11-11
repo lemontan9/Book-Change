@@ -22,6 +22,7 @@ SCOPES.forEach((scope) => provider.addScope(scope));
 
 export const ALLOWED_GOOGLE_ADMIN_EMAIL = 'lemontan9@gmail.com';
 
+const STORAGE_TOKEN_KEY = 'bookswap_google_token';
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
 
@@ -35,17 +36,21 @@ export const initAuth = (
       if (email !== ALLOWED_GOOGLE_ADMIN_EMAIL.toLowerCase()) {
         await signOut(auth);
         cachedAccessToken = null;
+        localStorage.removeItem(STORAGE_TOKEN_KEY);
         if (onAuthFailure) onAuthFailure();
         return;
       }
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        cachedAccessToken = null;
+
+      const token = cachedAccessToken || localStorage.getItem(STORAGE_TOKEN_KEY);
+      if (token) {
+        cachedAccessToken = token;
+        if (onAuthSuccess) onAuthSuccess(user, token);
+      } else {
         if (onAuthFailure) onAuthFailure();
       }
     } else {
       cachedAccessToken = null;
+      localStorage.removeItem(STORAGE_TOKEN_KEY);
       if (onAuthFailure) onAuthFailure();
     }
   });
@@ -59,6 +64,7 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     if (email !== ALLOWED_GOOGLE_ADMIN_EMAIL.toLowerCase()) {
       await signOut(auth);
       cachedAccessToken = null;
+      localStorage.removeItem(STORAGE_TOKEN_KEY);
       throw new Error(
         `สิทธิ์การเข้าถึงถูกจำกัด: เฉพาะบัญชี ${ALLOWED_GOOGLE_ADMIN_EMAIL} เท่านั้นที่สามารถเข้าสู่ระบบด้วย Google ได้ (บัญชีที่คุณใช้คือ ${email || 'ไม่ระบุ'})`
       );
@@ -70,6 +76,7 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     }
 
     cachedAccessToken = credential.accessToken;
+    localStorage.setItem(STORAGE_TOKEN_KEY, cachedAccessToken);
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     console.error('Google Sign-In Error:', error);
@@ -80,10 +87,17 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken;
+  if (cachedAccessToken) return cachedAccessToken;
+  const stored = localStorage.getItem(STORAGE_TOKEN_KEY);
+  if (stored) {
+    cachedAccessToken = stored;
+    return stored;
+  }
+  return null;
 };
 
 export const logout = async () => {
   await signOut(auth);
   cachedAccessToken = null;
+  localStorage.removeItem(STORAGE_TOKEN_KEY);
 };

@@ -19,6 +19,7 @@ import {
   ArrowRight,
   ArrowLeft,
   RotateCcw,
+  ShieldCheck,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import type { Book, SystemSettings, ParticipantInfo, KioskBookEntry, TransactionRecord } from '../types';
@@ -363,6 +364,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
     const takenCodes: string[] = [];
     let donatedCount = 0;
     let cancelledCount = 0;
+    let matchedCount = 0;
 
     const txId = `TX-${Date.now().toString().slice(-6)}`;
     let highestU = 'U0';
@@ -382,6 +384,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
           status: 'Not Match',
           source: 'User',
           transactionId: txId,
+          matchedTransactionId: '',
           memberType: participant.memberType,
           coverImage: entry.coverImage,
           createdAt: now,
@@ -406,12 +409,14 @@ export const KioskView: React.FC<KioskViewProps> = ({
           status: 'Available',
           source: 'Library',
           transactionId: txId,
+          matchedTransactionId: '',
           memberType: participant.memberType,
           coverImage: entry.coverImage,
           createdAt: now,
           exchangeCount: 1,
         });
       } else {
+        matchedCount++;
         broughtCodes.push(entry.code);
         takenCodes.push(targetCode!);
 
@@ -425,6 +430,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
           status: 'Available',
           source: 'User',
           transactionId: txId,
+          matchedTransactionId: txId,
           memberType: participant.memberType,
           coverImage: entry.coverImage,
           createdAt: now,
@@ -438,6 +444,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
             status: 'Matched',
             matchedAt: now,
             matchedWithCode: entry.code,
+            matchedTransactionId: txId,
             exchangeCount: (shelfBook.exchangeCount || 1) + 1,
           });
         }
@@ -447,15 +454,19 @@ export const KioskView: React.FC<KioskViewProps> = ({
     // Permanently commit and lock all assigned U codes so they can never be reused
     StorageService.commitUCodes(bookEntries.map((e) => e.code));
 
+    const totalBroughtCount = bookEntries.length;
+
     const transactionRecord: TransactionRecord = {
       id: txId,
       timestamp: now,
       participant,
-      booksBrought: broughtCodes,
-      booksTaken: takenCodes,
+      totalBroughtCount,
+      matchedCount,
       donatedCount,
       cancelledCount,
-      booksBroughtCount: broughtCodes.length,
+      booksBrought: broughtCodes,
+      booksTaken: takenCodes,
+      booksBroughtCount: totalBroughtCount,
       booksTakenCount: takenCodes.length,
     };
 
@@ -818,26 +829,6 @@ export const KioskView: React.FC<KioskViewProps> = ({
             >
               เริ่มต้นการแลกเปลี่ยน
             </button>
-
-            {onOpenAdminLogin && (
-              <div
-                style={{
-                  width: '686.222px',
-                  height: '35px',
-                  paddingTop: '0px',
-                  paddingBottom: '0px',
-                }}
-                className="text-center max-w-full flex items-center justify-center mx-auto"
-              >
-                <button
-                  type="button"
-                  onClick={onOpenAdminLogin}
-                  className="text-xs text-[#8A7E74] hover:text-[#7A4B30] underline underline-offset-4 transition-colors cursor-pointer"
-                >
-                  เข้าสู่ระบบสำหรับเจ้าหน้าที่
-                </button>
-              </div>
-            )}
           </div>
         )}
 

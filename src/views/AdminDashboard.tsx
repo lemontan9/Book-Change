@@ -8,10 +8,19 @@ import {
   Layers,
   BookMarked,
   Hash,
+  UploadCloud,
+  AlertTriangle,
+  CheckCircle2,
 } from 'lucide-react';
 import type { Book, SystemSettings, TransactionRecord } from '../types';
-import { fetchBooksFromSheet, fetchTransactionsFromSheet } from '../services/googleSheets';
-import { getAccessToken } from '../services/firebaseAuth';
+import {
+  fetchBooksFromSheet,
+  fetchTransactionsFromSheet,
+  syncAllBooksToSheet,
+  syncAllTransactionsToSheet,
+} from '../services/googleSheets';
+import { StorageService } from '../services/storage';
+import { getAccessToken, ALLOWED_GOOGLE_ADMIN_EMAIL } from '../services/firebaseAuth';
 
 interface AdminDashboardProps {
   books: Book[];
@@ -41,12 +50,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [sheetBooks, setSheetBooks] = useState<Book[]>(books || []);
   const [sheetTransactions, setSheetTransactions] = useState<TransactionRecord[]>(transactions || []);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [syncNotice, setSyncNotice] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null);
   const [isFetched, setIsFetched] = useState<boolean>(false);
   const [isUsingFallback, setIsUsingFallback] = useState<boolean>(false);
+  const [unsyncedBooksList, setUnsyncedBooksList] = useState<Book[]>([]);
+  const [unsyncedTxList, setUnsyncedTxList] = useState<TransactionRecord[]>([]);
+  const [isDismissedUnsynced, setIsDismissedUnsynced] = useState<boolean>(false);
 
-  // Fetch real data from Google Spreadsheet with graceful fallback to local storage
+  // Fetch real data from Google Spreadsheet with Smart Merge of local items
   const loadDataFromGoogleSheet = useCallback(async () => {
     if (!spreadsheetId) {
       setSheetBooks(books || []);
@@ -59,8 +73,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setErrorMsg(null);
 
     try {
-      // Optional token: if logged in as lemontan9@gmail.com, uses OAuth.
-      // If staff logged in with username/password, smoothly fetches via public proxy route (Anyone with the link can edit/view)
       const token = await getAccessToken().catch(() => null);
 
       // Fetch Books and Transactions sheets concurrently without requiring Google login
@@ -69,8 +81,75 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         fetchTransactionsFromSheet(token, spreadsheetId).catch(() => []),
       ]);
 
-      setSheetBooks(fetchedBooks);
-      setSheetTransactions(fetchedTransactions);
+      // Smart Merge: Google Sheet + Local System Database
+      // Books or transactions added locally (e.g. U10, U11, U12, U13) that are not yet on Google Sheet
+      // are seamlessly merged into Dashboard metrics
+      const mergedBooksMap = new Map<string, Book>();
+      fetchedBooks.forEach((b) => {
+        if (b.code) mergedBooksMap.set(b.code.toUpperCase(), b);
+      });
+
+      const localBooks = books && books.length > 0 ? books : StorageService.getBooks();
+      const localTx = transactions && transactions.length > 0 ? transactions : StorageService.getTransactions();
+
+      const pendingBooks: Book[] = [];
+      localBooks.forEach((b) => {
+        const key = b.code?.toUpperCase();
+        if (!key) return;
+        if (!mergedBooksMap.has(key)) {
+          mergedBooksMap.set(key, b);
+          pendingBooks.push(b);
+        } else {
+          // If local book has Matched status while sheet still has Available, use local match
+          const existing = mergedBooksMap.get(key)!;
+          if (b.status === 'Matched' && existing.status !== 'Matched') {
+            mergedBooksMap.set(key, {
+              ...existing,
+              status: 'Matched',
+              matchedAt: b.matchedAt,
+              matchedWithCode: b.matchedWithCode,
+            });
+          }
+        }
+      });
+
+      const mergedTransactionsMap = new Map<string, TransactionRecord>();
+      fetchedTransactions.forEach((t) => {
+        if (t.id) mergedTransactionsMap.set(t.id, t);
+      });
+
+      const pendingTx: TransactionRecord[] = [];
+      localTx.forEach((t) => {
+        if (t.id && !mergedTransactionsMap.has(t.id)) {
+          mergedTransactionsMap.set(t.id, t);
+          pendingTx.push(t);
+        }
+      });
+
+      const finalBooks = Array.from(mergedBooksMap.values());
+      const finalTransactions = Array.from(mergedTransactionsMap.values());
+
+      setSheetBooks(finalBooks);
+      setSheetTransactions(finalTransactions);
+      setUnsyncedBooksList(pendingBooks);
+      setUnsyncedTxList(pendingTx);
+
+      // If Google token is active and there are pending items, automatically push them to Google Sheet!
+      if (token && (pendingBooks.length > 0 || pendingTx.length > 0)) {
+        try {
+          await syncAllBooksToSheet(token, spreadsheetId, finalBooks);
+          await syncAllTransactionsToSheet(token, spreadsheetId, finalTransactions);
+          setUnsyncedBooksList([]);
+          setUnsyncedTxList([]);
+          setSyncNotice({
+            type: 'success',
+            text: `ระบบทำการซิงค์หนังสือใหม่ ${pendingBooks.length} เล่ม และธุรกรรม ${pendingTx.length} รายการขึ้น Google Sheet อัตโนมัติเรียบร้อย!`,
+          });
+        } catch (autoSyncErr) {
+          console.warn('Background auto-push non-fatal:', autoSyncErr);
+        }
+      }
+
       setIsUsingFallback(false);
       setLastFetchedAt(
         new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -80,14 +159,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     } catch (err: any) {
       console.warn('Failed to load Dashboard data from Google Sheet, using system local cache:', err);
       // Gracefully fall back to local system database
-      if (books && books.length > 0) {
-        setSheetBooks(books);
-        setSheetTransactions(transactions || []);
-        setIsUsingFallback(true);
-      } else {
-        setSheetBooks([]);
-        setSheetTransactions([]);
-      }
+      const fallbackBooks = books && books.length > 0 ? books : StorageService.getBooks();
+      const fallbackTx = transactions && transactions.length > 0 ? transactions : StorageService.getTransactions();
+      setSheetBooks(fallbackBooks);
+      setSheetTransactions(fallbackTx);
+      setIsUsingFallback(true);
       setErrorMsg(
         err.message ||
           'ไม่สามารถดึงข้อมูลสดจาก Google Sheet ได้ โปรดตรวจสอบว่า Spreadsheet เปิดสิทธิ์แชร์เป็น "Anyone with the link can edit/view" หรือตรวจสอบการเชื่อมต่ออินเทอร์เน็ต'
@@ -97,6 +173,48 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setIsLoading(false);
     }
   }, [spreadsheetId, books, transactions]);
+
+  const handleManualSyncToGoogleSheet = async () => {
+    setIsSyncing(true);
+    setSyncNotice(null);
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        if (onConnectGoogle) {
+          onConnectGoogle();
+        }
+        setSyncNotice({
+          type: 'info',
+          text: `กรุณาลงชื่อเข้าใช้ด้วย Google บัญชี ${ALLOWED_GOOGLE_ADMIN_EMAIL} เพื่ออนุญาตให้ระบบส่งข้อมูลขึ้น Google Sheet`,
+        });
+        return;
+      }
+
+      const allLocalBooks = books && books.length > 0 ? books : StorageService.getBooks();
+      const allLocalTx = transactions && transactions.length > 0 ? transactions : StorageService.getTransactions();
+
+      await syncAllBooksToSheet(token, spreadsheetId, allLocalBooks);
+      await syncAllTransactionsToSheet(token, spreadsheetId, allLocalTx);
+
+      setSyncNotice({
+        type: 'success',
+        text: `ซิงค์ข้อมูลหนังสือทั้งหมด (${allLocalBooks.length} เล่ม) และธุรกรรม (${allLocalTx.length} รายการ) ขึ้น Google Sheet สำเร็จเรียบร้อย!`,
+      });
+      setUnsyncedBooksList([]);
+      setUnsyncedTxList([]);
+
+      // Reload fresh data from sheet
+      await loadDataFromGoogleSheet();
+    } catch (err: any) {
+      console.error('Manual sync error:', err);
+      setSyncNotice({
+        type: 'error',
+        text: `เกิดข้อผิดพลาดในการซิงค์: ${err.message || 'โปรดตรวจสอบการเชื่อมต่อ'}`,
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // Load from Google Sheet automatically on mount or when spreadsheetId changes
   useEffect(() => {
@@ -145,7 +263,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const totalTx = list.length;
 
     list.forEach((t) => {
-      const count = Array.isArray(t.booksBrought) ? t.booksBrought.length : 0;
+      const count =
+        t.totalBroughtCount !== undefined
+          ? t.totalBroughtCount
+          : (t.booksBroughtCount ?? (Array.isArray(t.booksBrought) ? t.booksBrought.length : 0));
       totalBrought += count;
       if (count === 1) {
         buckets.one++;
@@ -190,14 +311,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           color: '#B4A7D6',
         },
       ],
-      recentTransactions: list.slice(0, 5).map((t) => ({
-        id: t.id,
-        timestamp: t.timestamp,
-        memberType: t.participant.memberType,
-        broughtCount: Array.isArray(t.booksBrought) ? t.booksBrought.length : 0,
-        broughtCodes: t.booksBrought || [],
-        takenCodes: t.booksTaken || [],
-      })),
+      recentTransactions: list.slice(0, 8).map((t) => {
+        const totalBrought =
+          t.totalBroughtCount !== undefined
+            ? t.totalBroughtCount
+            : (t.booksBroughtCount ?? (Array.isArray(t.booksBrought) ? t.booksBrought.length : 0));
+        const matched =
+          t.matchedCount !== undefined
+            ? t.matchedCount
+            : (t.booksTakenCount ?? (Array.isArray(t.booksTaken) ? t.booksTaken.length : 0));
+
+        return {
+          id: t.id,
+          timestamp: t.timestamp,
+          memberType: t.participant.memberType,
+          totalBroughtCount: totalBrought,
+          matchedCount: matched,
+          donatedCount: t.donatedCount || 0,
+          cancelledCount: t.cancelledCount || 0,
+          broughtCodes: t.booksBrought || [],
+          takenCodes: t.booksTaken || [],
+        };
+      }),
     };
   }, [distinctTransactionMap]);
 
@@ -392,7 +527,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       {/* 3. Action Buttons: Open Google Sheet & Refresh */}
-      <div className="flex items-center justify-end gap-2.5">
+      <div className="flex items-center justify-end gap-2.5 flex-wrap">
+
         {spreadsheetId && (
           <a
             href={`https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`}
@@ -416,6 +552,68 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <span>{isLoading ? 'กำลังดึงข้อมูลสด...' : 'รีเฟรชข้อมูล'}</span>
         </button>
       </div>
+
+      {/* Unsynced Items Notification Banner (เฉพาะเมื่อ Super Admin เข้าสู่ระบบ เพื่อป้องกันความสับสนสำหรับเจ้าหน้าที่ทั่วไป) */}
+      {googleConnected && !isDismissedUnsynced && unsyncedBooksList.length > 0 && (
+        <div className="bg-[#FFF8E1] border border-[#FFE082] rounded-2xl p-3.5 text-xs text-[#8D6E63] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 shadow-xs">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-[#F57C00] shrink-0" />
+            <span>
+              <strong className="text-[#E65100]">มีข้อมูลใหม่ในระบบที่ยังไม่ได้ส่งขึ้น Google Sheet:</strong> หนังสือ {unsyncedBooksList.length} เล่ม ({unsyncedBooksList.map((b) => b.code).join(', ')})
+              {unsyncedTxList.length > 0 && ` และธุรกรรม ${unsyncedTxList.length} รายการ`}
+              <span className="text-[#6D4C41] block sm:inline sm:ml-1">
+                (ข้อมูลรวมแสดงใน Dashboard ให้เรียบร้อยแล้ว)
+              </span>
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              disabled={isSyncing}
+              onClick={handleManualSyncToGoogleSheet}
+              className="bg-[#2A3B4C] hover:bg-[#1E2B38] text-white px-3 py-1.5 rounded-xl font-medium text-xs flex items-center gap-1 transition-colors cursor-pointer"
+            >
+              <UploadCloud className="w-3.5 h-3.5" />
+              <span>ซิงค์ขึ้น Sheet ทันที</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsDismissedUnsynced(true)}
+              className="text-[#8D6E63] hover:text-[#5D4037] p-1 cursor-pointer font-bold"
+              title="ปิดการแจ้งเตือนนี้"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Sync Status Feedback Toast */}
+      {syncNotice && (
+        <div
+          className={`p-3 rounded-2xl text-xs flex items-center gap-2 shadow-xs ${
+            syncNotice.type === 'success'
+              ? 'bg-[#E8F5E9] text-[#2E7D32] border border-[#4CAF4F]/30'
+              : syncNotice.type === 'info'
+              ? 'bg-[#EBF3FB] text-[#1E5C8B] border border-[#BBD8F5]'
+              : 'bg-[#FFEBEE] text-[#D32F2F] border border-[#FFCDD2]'
+          }`}
+        >
+          {syncNotice.type === 'success' ? (
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-[#2E7D32]" />
+          ) : (
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+          )}
+          <span className="flex-1">{syncNotice.text}</span>
+          <button
+            type="button"
+            onClick={() => setSyncNotice(null)}
+            className="text-xs opacity-60 hover:opacity-100 cursor-pointer ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* 4. Three Metric Banner Cards (Computed 100% from Google Sheet) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -855,9 +1053,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {booksPerTransactionStats.recentTransactions.map((tx) => (
                 <div
                   key={tx.id}
-                  className="bg-white/90 border border-[#EADBCC]/70 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs flex-wrap gap-2 shadow-2xs"
+                  className="bg-white/90 border border-[#EADBCC]/70 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs flex-wrap gap-2 shadow-2xs hover:border-[#D8CABE] transition-colors"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2.5 flex-wrap">
                     <span className="font-mono font-bold text-xs text-[#2A3B4C] bg-[#F5F7FA] px-2.5 py-1 rounded-lg border border-[#E8ECF2]">
                       {tx.id}
                     </span>
@@ -865,21 +1063,42 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       {tx.memberType}
                     </span>
                     {tx.timestamp && (
-                      <span className="text-[10px] text-[#8A7E74] hidden sm:inline">
+                      <span className="text-[10px] text-[#8A7E74]">
                         • {new Date(tx.timestamp).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}
                       </span>
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2.5">
-                    <span className="inline-flex items-center gap-1 font-semibold bg-[#E8F5E9] text-[#2E7D32] border border-[#4CAF4F]/20 px-2.5 py-1 rounded-lg text-xs">
-                      <BookOpen className="w-3 h-3" />
-                      นำมา {tx.broughtCount} เล่ม ({tx.broughtCodes.join(', ') || '-'})
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {/* นำมา X เล่ม */}
+                    <span className="inline-flex items-center gap-1 font-semibold bg-[#E8F5E9] text-[#2E7D32] border border-[#4CAF4F]/25 px-2.5 py-1 rounded-lg text-xs" title={`รหัสหนังสือที่นำมา: ${tx.broughtCodes.join(', ') || '-'}`}>
+                      <BookOpen className="w-3 h-3 shrink-0" />
+                      นำมา {tx.totalBroughtCount} เล่ม {tx.broughtCodes.length > 0 && `(${tx.broughtCodes.join(', ')})`}
                     </span>
 
+                    {/* Match count */}
+                    <span className="inline-flex items-center font-semibold bg-[#E3F2FD] text-[#1565C0] border border-[#90CAF9]/40 px-2 py-0.5 rounded-lg text-[11px]" title="จำนวนที่จับคู่สำเร็จ">
+                      Match = {tx.matchedCount}
+                    </span>
+
+                    {/* Donate count */}
+                    {tx.donatedCount > 0 && (
+                      <span className="inline-flex items-center font-medium bg-[#FFF3E0] text-[#E65100] border border-[#FFE082]/60 px-2 py-0.5 rounded-lg text-[11px]" title="บริจาค">
+                        Donate = {tx.donatedCount}
+                      </span>
+                    )}
+
+                    {/* Cancelled count */}
+                    {tx.cancelledCount > 0 && (
+                      <span className="inline-flex items-center font-medium bg-[#FFEBEE] text-[#C62828] border border-[#FFCDD2]/60 px-2 py-0.5 rounded-lg text-[11px]" title="ยกเลิกการจับคู่">
+                        Cancelled = {tx.cancelledCount}
+                      </span>
+                    )}
+
+                    {/* Books taken from central */}
                     {tx.takenCodes.length > 0 && (
-                      <span className="text-[11px] bg-[#FAF5EE] text-[#7A4B30] border border-[#EADBCC] px-2 py-1 rounded-lg font-medium">
-                        แลกออก: <span className="font-mono font-bold">{tx.takenCodes.join(', ')}</span>
+                      <span className="text-[11px] bg-[#FAF5EE] text-[#7A4B30] border border-[#EADBCC] px-2 py-0.5 rounded-lg font-medium" title="หนังสือส่วนกลางที่หยิบไป">
+                        แลกออก: <span className="font-mono font-bold text-[#502F1D]">{tx.takenCodes.join(', ')}</span>
                       </span>
                     )}
                   </div>
