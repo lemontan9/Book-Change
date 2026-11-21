@@ -72,12 +72,13 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
     setIsLoadingGoogle(true);
     setErrorMsg(null);
     try {
-      const res = await googleSignIn();
+      const boundSheetId = StorageService.getSettings().connectedSpreadsheetId;
+      const res = await googleSignIn(boundSheetId);
       if (res) {
         if (onGoogleConnected) {
           onGoogleConnected(res.user, res.accessToken);
         }
-        onLoginSuccess(res.user.displayName || res.user.email || 'Super Admin');
+        onLoginSuccess(res.user.displayName || res.user.email || 'Google Admin');
         onClose();
       }
     } catch (err: any) {
@@ -90,42 +91,43 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50 backdrop-blur-xs font-sans">
-      <div className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-sm p-6 shadow-xl border border-[#E8ECF2] relative animate-in slide-in-from-bottom-5">
-        <div className="w-10 h-1 bg-[#E8ECF2] rounded-full mx-auto mb-3 sm:hidden" />
+      <div className="bg-[#FFFCF7] rounded-t-[28px] sm:rounded-[28px] w-full max-w-sm p-6 shadow-2xl border border-[#EAE0D2] relative">
+        <div className="w-10 h-1 bg-[#E5D8C8] rounded-full mx-auto mb-3 sm:hidden" />
         <button
+          type="button"
           onClick={onClose}
-          className="absolute top-5 right-5 p-1 text-[#717171] hover:text-[#263238] cursor-pointer"
+          className="absolute top-5 right-5 w-8 h-8 rounded-full bg-white border border-[#E5D8C8] flex items-center justify-center text-[#7E7369] hover:text-[#3E2723] cursor-pointer transition-colors"
         >
-          <X className="w-5 h-5" />
+          <X className="w-4 h-4" />
         </button>
 
         <div className="text-center mb-4">
-          <div className="w-12 h-12 rounded-2xl bg-[#E8F5E9] flex items-center justify-center text-[#4CAF4F] mx-auto mb-2 border border-[#4CAF4F]/20">
-            <ShieldCheck className="w-6 h-6 text-[#2E7D32]" />
+          <div className="w-12 h-12 rounded-2xl bg-[#DCE7C4] flex items-center justify-center mx-auto mb-2.5 border border-[#C3D3A6]">
+            <ShieldCheck className="w-6 h-6 text-[#4B5E26]" />
           </div>
-          <h3 className="text-base font-bold text-[#263238]">
-            เข้าสู่ระบบ / เชื่อมต่อ Super User
+          <h3 className="text-base font-bold text-[#4E342E]">
+            เข้าสู่ระบบ / เชื่อมต่อเจ้าหน้าที่
           </h3>
-          <p className="text-[11px] text-[#717171] mt-0.5">
+          <p className="text-[11px] text-[#7E7369] mt-0.5">
             เชื่อมต่อ Google Sheet หรือเข้าจัดการระบบสำหรับเจ้าหน้าที่
           </p>
         </div>
 
-        {/* Tab Switcher: Super User (Google) vs เจ้าหน้าที่ (Staff) */}
-        <div className="flex bg-[#F5F7FA] p-1 rounded-2xl mb-4 border border-[#E8ECF2]">
+        {/* Tab Switcher */}
+        <div className="flex bg-[#F3ECE1] p-1 rounded-full mb-4 border border-[#E5D8C8]">
           <button
             type="button"
             onClick={() => {
               setActiveTab('superuser');
               setErrorMsg(null);
             }}
-            className={`flex-1 py-1.5 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
+            className={`flex-1 py-1.5 text-xs font-semibold rounded-full transition-all cursor-pointer ${
               activeTab === 'superuser'
-                ? 'bg-white text-[#2A3B4C] shadow-xs border border-[#E0D2BE]'
-                : 'text-[#717171] hover:text-[#263238]'
+                ? 'bg-[#7D502E] text-white shadow-xs'
+                : 'text-[#6D5C50] hover:text-[#3E2723]'
             }`}
           >
-            Super User (Google)
+            Google Mail (Sheet)
           </button>
           <button
             type="button"
@@ -133,10 +135,10 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
               setActiveTab('staff');
               setErrorMsg(null);
             }}
-            className={`flex-1 py-1.5 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
+            className={`flex-1 py-1.5 text-xs font-semibold rounded-full transition-all cursor-pointer ${
               activeTab === 'staff'
-                ? 'bg-white text-[#2A3B4C] shadow-xs border border-[#E0D2BE]'
-                : 'text-[#717171] hover:text-[#263238]'
+                ? 'bg-[#7D502E] text-white shadow-xs'
+                : 'text-[#6D5C50] hover:text-[#3E2723]'
             }`}
           >
             เจ้าหน้าที่ (Password)
@@ -144,25 +146,25 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
         </div>
 
         {errorMsg && (
-          <div className="mb-3 p-2.5 rounded-xl bg-[#FFEBEE] border border-[#FFCDD2] text-[11px] text-[#D32F2F] flex items-center gap-1.5">
-            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          <div className="mb-3 p-2.5 rounded-2xl bg-[#FFF0F0] border border-[#FFCDCD] text-[11px] text-[#D32F2F] flex items-start gap-1.5">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span>{errorMsg}</span>
           </div>
         )}
 
-        {/* TAB 1: Super User (Google Sign-In) */}
+        {/* TAB 1: Google Sign-In (Authorized Google Sheet Editors) */}
         {activeTab === 'superuser' && (
           <div className="space-y-3">
-            <div className="bg-[#FAF5EE] border border-[#EADBCC] rounded-2xl p-3.5 text-xs text-[#5D4037] space-y-1.5">
-              <div className="font-bold flex items-center gap-1.5 text-[#7A4B30]">
-                <ShieldCheck className="w-4 h-4 text-[#7A4B30]" />
-                <span>เชื่อมต่อสิทธิ์ Super User ประจำเครื่อง</span>
+            <div className="bg-[#F8F2E7] border border-[#E5D8C8] rounded-2xl p-3.5 text-xs text-[#4E342E] space-y-1.5">
+              <div className="font-bold flex items-center gap-1.5 text-[#5C3A21]">
+                <ShieldCheck className="w-4 h-4 text-[#7D502E]" />
+                <span>Log in ด้วยบัญชี Google Mail</span>
               </div>
-              <p className="text-[11px] text-[#71675E] leading-relaxed">
-                ลงชื่อเข้าใช้ด้วย Google เพียงครั้งเดียว เพื่อให้ตู้ Kiosk นี้ส่งข้อมูลหนังสือและ Transaction เข้า Google Sheet ได้แบบอัตโนมัติ
+              <p className="text-[11px] text-[#6D5C50] leading-relaxed">
+                สำหรับผู้มี Google Mail ที่ได้รับสิทธิ์เข้าถึง (Editor) ใน Google Sheet ที่ผูกกับระบบ เพื่อให้ข้อมูลหนังสือ Update อัตโนมัติ
               </p>
-              <div className="text-[10px] text-[#2E7D32] bg-[#E8F5E9] px-2 py-0.5 rounded-md font-mono font-medium inline-block border border-[#4CAF4F]/20">
-                เฉพาะบัญชี: lemontan9@gmail.com
+              <div className="text-[10px] text-[#4B5E26] bg-[#DCE7C4] px-2.5 py-0.5 rounded-full font-semibold inline-block border border-[#C3D3A6]">
+                ตรวจสอบสิทธิ์จาก Google Sheet ที่ผูกกับระบบอัตโนมัติ
               </div>
             </div>
 
@@ -170,7 +172,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
               type="button"
               onClick={handleGoogleSignIn}
               disabled={isLoadingGoogle}
-              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border border-[#D8CABE] bg-white hover:bg-[#F5F7FA] active:scale-[0.98] text-xs font-semibold text-[#263238] transition-all shadow-xs cursor-pointer tracking-tight"
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-full border border-[#DDD0BF] bg-white hover:bg-[#F8F2E7] active:scale-[0.98] disabled:opacity-70 text-xs font-semibold text-[#3E2723] transition-all shadow-xs cursor-pointer"
             >
               <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                 <path
@@ -190,42 +192,44 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                   d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                 />
               </svg>
-              <span>{isLoadingGoogle ? 'กำลังเชื่อมต่อ Google...' : 'ลงชื่อเข้าใช้ด้วย Google (Super User)'}</span>
+              <span>
+                {isLoadingGoogle ? 'กำลังตรวจสอบสิทธิ์ Google Sheet...' : 'ลงชื่อเข้าใช้ด้วย Google'}
+              </span>
             </button>
           </div>
         )}
 
-        {/* TAB 2: Staff Login (Username & Password) */}
+        {/* TAB 2: Staff Login */}
         {activeTab === 'staff' && (
           <form onSubmit={handleTestLogin} className="space-y-3">
             <div>
-              <label className="block text-[11px] font-medium text-[#263238] mb-1">
+              <label className="block text-[11px] font-semibold text-[#4E342E] mb-1">
                 Username
               </label>
               <div className="relative">
-                <User className="w-3.5 h-3.5 text-[#717171] absolute left-3 top-3" />
+                <User className="w-3.5 h-3.5 text-[#7E7369] absolute left-3.5 top-2.5" />
                 <input
                   type="text"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="เช่น admin"
-                  className="w-full pl-8 pr-3 py-2 rounded-xl border border-[#E8ECF2] text-xs font-mono bg-[#F5F7FA] text-[#263238] focus:outline-hidden focus:ring-1 focus:ring-[#4CAF4F]"
+                  className="w-full pl-9 pr-3.5 py-2 rounded-2xl border border-[#DDD0BF] text-xs font-mono bg-white text-[#3A2D26] focus:outline-hidden focus:ring-2 focus:ring-[#7D502E]"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-[11px] font-medium text-[#263238] mb-1">
+              <label className="block text-[11px] font-semibold text-[#4E342E] mb-1">
                 Password
               </label>
               <div className="relative">
-                <Lock className="w-3.5 h-3.5 text-[#717171] absolute left-3 top-3" />
+                <Lock className="w-3.5 h-3.5 text-[#7E7369] absolute left-3.5 top-2.5" />
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="กรอกรหัสผ่าน"
-                  className="w-full pl-8 pr-3 py-2 rounded-xl border border-[#E8ECF2] text-xs font-mono bg-[#F5F7FA] text-[#263238] focus:outline-hidden focus:ring-1 focus:ring-[#4CAF4F]"
+                  className="w-full pl-9 pr-3.5 py-2 rounded-2xl border border-[#DDD0BF] text-xs font-mono bg-white text-[#3A2D26] focus:outline-hidden focus:ring-2 focus:ring-[#7D502E]"
                 />
               </div>
             </div>
@@ -233,7 +237,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
             <button
               type="submit"
               disabled={isLoggingIn}
-              className="w-full py-2 bg-[#2a3b4c] hover:bg-[#1e2b38] disabled:opacity-75 text-white font-medium text-xs rounded-xl shadow-xs transition-all cursor-pointer tracking-tight flex items-center justify-center gap-1.5"
+              className="w-full py-2.5 bg-gradient-to-r from-[#875835] to-[#744829] hover:from-[#754B2B] hover:to-[#603A1F] disabled:opacity-75 text-white font-semibold text-xs rounded-full shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1.5"
             >
               {isLoggingIn ? (
                 <>
@@ -244,7 +248,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                 <span>เข้าสู่ระบบเจ้าหน้าที่</span>
               )}
             </button>
-            <p className="text-[10px] text-center text-[#8A7E74]">
+            <p className="text-[10px] text-center text-[#7E7369]">
               สำหรับเจ้าหน้าที่ทั่วไป เข้าตรวจดูสถิติใน Dashboard และ Book List
             </p>
           </form>

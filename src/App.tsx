@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import type { Book, SystemSettings, TransactionRecord, StaffAccount } from './types';
 import { StorageService } from './services/storage';
 import { initAuth, logout, getAccessToken } from './services/firebaseAuth';
@@ -38,12 +38,139 @@ export default function App() {
   const [googleUser, setGoogleUser] = useState<any | null>(null);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
 
-  // Load initial data from persistent Storage
+  const getActiveSpreadsheetId = useCallback(() => {
+    const currentSettings = StorageService.getSettings();
+    return (
+      (currentSettings.connectedSpreadsheetId &&
+      !currentSettings.connectedSpreadsheetId.startsWith('172FuZL2')
+        ? currentSettings.connectedSpreadsheetId.trim()
+        : '') || '1ppG2ExLSTl5pb1TS47pW2aNvqMVID8qvXwrB3_uOSm0'
+    );
+  }, []);
+
+  // Authoritative Pull: fetches exact latest data from Google Sheet and updates system state & localStorage
+  const pullFromGoogleSheet = useCallback(
+    async (tokenOverride?: string | null): Promise<{ books: Book[]; transactions: TransactionRecord[] }> => {
+      const targetId = getActiveSpreadsheetId();
+      const token =
+        tokenOverride !== undefined
+          ? tokenOverride
+          : googleToken || (await getAccessToken().catch(() => null));
+
+      const [fetchedBooks, fetchedTx] = await Promise.all([
+        fetchBooksFromSheet(token, targetId),
+        fetchTransactionsFromSheet(token, targetId).catch(() => []),
+      ]);
+
+      const sortedBooks = StorageService.sortBooks(fetchedBooks);
+      StorageService.saveBooks(sortedBooks);
+      StorageService.registerUsedCodes(sortedBooks.map((b) => b.code));
+      setBooks(sortedBooks);
+
+      StorageService.saveTransactions(fetchedTx);
+      setTransactions(fetchedTx);
+
+      const updatedSettings: SystemSettings = {
+        ...StorageService.getSettings(),
+        lastSyncTime: new Date().toISOString(),
+      };
+      StorageService.saveSettings(updatedSettings);
+      setSettings(updatedSettings);
+
+      return { books: sortedBooks, transactions: fetchedTx };
+    },
+    [googleToken, getActiveSpreadsheetId]
+  );
+
+  const refreshFromGoogleSheet = useCallback(
+    async (tokenOverride?: string | null) => {
+      try {
+        await pullFromGoogleSheet(tokenOverride);
+      } catch (err) {
+        console.warn('Live Google Sheet refresh non-fatal, keeping local cache:', err);
+      }
+    },
+    [pullFromGoogleSheet]
+  );
+
+  const handleAddBookToGoogle = useCallback(
+    async (
+      newBook: Book,
+      updatedBooks: Book[]
+    ): Promise<{ synced: boolean; reason?: 'no_auth' | 'error'; error?: string }> => {
+      try {
+        const token = googleToken || (await getAccessToken().catch(() => null));
+        if (!token) {
+          setIsLoginModalOpen(true);
+          return { synced: false, reason: 'no_auth' };
+        }
+
+        const targetId = getActiveSpreadsheetId();
+        const bookToAppend: Book = { ...newBook };
+
+        // Upload cover image to Google Drive if provided as data URL so the sheet cell stays lightweight
+        if (bookToAppend.coverImage && bookToAppend.coverImage.startsWith('data:image')) {
+          try {
+            let folderId = settings.connectedDriveFolderId;
+            if (!folderId) {
+              folderId = await getOrCreateBookCoversFolder(token);
+              const withFolder = { ...StorageService.getSettings(), connectedDriveFolderId: folderId };
+              StorageService.saveSettings(withFolder);
+              setSettings(withFolder);
+            }
+            const driveRes = await uploadCoverImageToDrive(
+              token,
+              folderId,
+              `${bookToAppend.code}_${bookToAppend.title.slice(0, 20)}.jpg`,
+              bookToAppend.coverImage
+            );
+            bookToAppend.driveFileId = driveRes.fileId;
+          } catch (driveErr) {
+            console.warn('Cover Drive upload on add book non-fatal:', driveErr);
+          }
+        }
+
+        // Immediately append the new book row to Google Sheet
+        await appendBookToSheet(token, targetId, bookToAppend);
+
+        // Save driveFileId locally if uploaded
+        if (bookToAppend.driveFileId) {
+          const withDrive = updatedBooks.map((b) =>
+            b.id === bookToAppend.id ? { ...b, driveFileId: bookToAppend.driveFileId } : b
+          );
+          StorageService.saveBooks(withDrive);
+          setBooks(withDrive);
+        }
+
+        const finalSettings: SystemSettings = {
+          ...StorageService.getSettings(),
+          lastSyncTime: new Date().toISOString(),
+        };
+        StorageService.saveSettings(finalSettings);
+        setSettings(finalSettings);
+
+        return { synced: true };
+      } catch (err: any) {
+        console.error('Append new book to Google Sheet error:', err);
+        return {
+          synced: false,
+          reason: 'error',
+          error: err?.message || 'ไม่สามารถบันทึกลง Google Sheet ได้',
+        };
+      }
+    },
+    [googleToken, getActiveSpreadsheetId, settings.connectedDriveFolderId]
+  );
+
+  // Load initial data from persistent Storage, then sync live data from Google Sheet
   useEffect(() => {
     setBooks(StorageService.getBooks());
     setSettings(StorageService.getSettings());
     setTransactions(StorageService.getTransactions());
     setStaff(StorageService.getStaff());
+
+    // Immediately pull live public Google Sheet so Kiosk Home counts match Dashboard & Sheet
+    refreshFromGoogleSheet(null);
 
     // Initialize Firebase Auth listener
     initAuth(
@@ -153,6 +280,9 @@ export default function App() {
       return;
     }
     setCurrentTab(tab);
+    if (tab === 'kiosk') {
+      refreshFromGoogleSheet();
+    }
   };
 
   const handleGoHome = () => {
@@ -161,7 +291,12 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F8F3EA] text-[#332D29] flex flex-col font-sans select-none">
+    <div
+      className="min-h-screen bg-[#FAF3E6] text-[#3A2D26] flex flex-col font-sans select-none bg-cover bg-bottom bg-no-repeat bg-fixed"
+      style={{
+        backgroundImage: "url('/assets/aistudio/image_074dfe2c.png')",
+      }}
+    >
       <Navbar
         currentTab={currentTab}
         onSelectTab={handleSelectTab}
@@ -189,10 +324,12 @@ export default function App() {
             books={books}
             settings={settings}
             onUpdateBooks={(updated) => setBooks(updated)}
+            onPullFromGoogleSheet={() => pullFromGoogleSheet()}
+            onAddBookToGoogle={handleAddBookToGoogle}
             onSyncToGoogle={async (updatedBooks?: Book[]) => {
               try {
                 const token = googleToken || (await getAccessToken());
-                const targetId = settings.connectedSpreadsheetId || '1ppG2ExLSTl5pb1TS47pW2aNvqMVID8qvXwrB3_uOSm0';
+                const targetId = getActiveSpreadsheetId();
                 const list = updatedBooks || books;
                 if (!token) {
                   setIsLoginModalOpen(true);
@@ -218,6 +355,13 @@ export default function App() {
             onConnectGoogle={() => setIsLoginModalOpen(true)}
             onSelectTab={handleSelectTab}
             onOpenAddBook={() => setCurrentTab('books')}
+            onSheetDataSynced={(freshBooks, freshTx) => {
+              const sorted = StorageService.sortBooks(freshBooks);
+              StorageService.saveBooks(sorted);
+              StorageService.saveTransactions(freshTx);
+              setBooks(sorted);
+              setTransactions(freshTx);
+            }}
           />
         )}
 
@@ -244,49 +388,16 @@ export default function App() {
         onLoginSuccess={async (user) => {
           setIsAdminLoggedIn(true);
           setAdminUsername(user);
-          setCurrentTab('dashboard');
-
-          // Immediately refresh latest data directly from public Google Sheet without requiring Google login
-          try {
-            const targetId = settings.connectedSpreadsheetId || '1ppG2ExLSTl5pb1TS47pW2aNvqMVID8qvXwrB3_uOSm0';
-            const token = googleToken || (await getAccessToken().catch(() => null));
-            const [fetchedBooks, fetchedTx] = await Promise.all([
-              fetchBooksFromSheet(token, targetId),
-              fetchTransactionsFromSheet(token, targetId).catch(() => []),
-            ]);
-
-            if (fetchedBooks && fetchedBooks.length > 0) {
-              const localBooks = StorageService.getBooks();
-              const sheetCodes = new Set(fetchedBooks.map((b) => b.code.toUpperCase()));
-              const pendingLocal = localBooks.filter((b) => !sheetCodes.has(b.code.toUpperCase()));
-              const mergedBooks = StorageService.sortBooks([...fetchedBooks, ...pendingLocal]);
-              StorageService.saveBooks(mergedBooks);
-              setBooks(mergedBooks);
-            }
-
-            if (fetchedTx && fetchedTx.length > 0) {
-              const localTx = StorageService.getTransactions();
-              const sheetTxIds = new Set(fetchedTx.map((t) => t.id));
-              const pendingTx = localTx.filter((t) => !sheetTxIds.has(t.id));
-              const mergedTx = [...fetchedTx, ...pendingTx];
-              StorageService.saveTransactions(mergedTx);
-              setTransactions(mergedTx);
-            }
-          } catch (err) {
-            console.warn('Auto refresh on login non-fatal:', err);
-          }
+          setCurrentTab((prev) => (prev === 'kiosk' ? 'dashboard' : prev));
+          await refreshFromGoogleSheet();
         }}
         onGoogleConnected={async (user, token) => {
           setGoogleUser(user);
           setGoogleToken(token);
           try {
-            const targetId = settings.connectedSpreadsheetId || '1ppG2ExLSTl5pb1TS47pW2aNvqMVID8qvXwrB3_uOSm0';
-            const allBooks = StorageService.getBooks();
-            const allTx = StorageService.getTransactions();
-            await syncAllBooksToSheet(token, targetId, allBooks);
-            await syncAllTransactionsToSheet(token, targetId, allTx);
+            await pullFromGoogleSheet(token);
           } catch (syncErr) {
-            console.warn('Auto sync on Google connect non-fatal:', syncErr);
+            console.warn('Auto pull on Google connect non-fatal:', syncErr);
           }
         }}
       />

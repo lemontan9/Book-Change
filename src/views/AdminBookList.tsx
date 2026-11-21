@@ -10,10 +10,12 @@ import {
   ChevronDown,
   ChevronsUpDown,
   ArrowUpDown,
-  UploadCloud,
+  DownloadCloud,
   RefreshCw,
+  CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react';
-import type { Book, SystemSettings } from '../types';
+import type { Book, SystemSettings, TransactionRecord } from '../types';
 import { StorageService } from '../services/storage';
 import { BookCover } from '../components/BookCover';
 import { CameraCaptureModal } from '../components/CameraCaptureModal';
@@ -23,6 +25,11 @@ interface AdminBookListProps {
   settings: SystemSettings;
   onUpdateBooks: (books: Book[]) => void;
   onSyncToGoogle?: (updatedBooks?: Book[]) => void;
+  onPullFromGoogleSheet?: () => Promise<{ books: Book[]; transactions: TransactionRecord[] }>;
+  onAddBookToGoogle?: (
+    newBook: Book,
+    updatedBooks: Book[]
+  ) => Promise<{ synced: boolean; reason?: 'no_auth' | 'error'; error?: string }>;
   onSelectTab?: (tab: 'kiosk' | 'dashboard' | 'books' | 'settings') => void;
 }
 
@@ -34,13 +41,20 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
   settings,
   onUpdateBooks,
   onSyncToGoogle,
+  onPullFromGoogleSheet,
+  onAddBookToGoogle,
   onSelectTab,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [sortColumn, setSortColumn] = useState<SortColumn>('code');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const [isPulling, setIsPulling] = useState<boolean>(false);
+  const [isSavingBook, setIsSavingBook] = useState<boolean>(false);
+  const [syncNotice, setSyncNotice] = useState<{
+    type: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [viewingBook, setViewingBook] = useState<Book | null>(null);
@@ -97,36 +111,84 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
     return list;
   }, [filteredBooks, sortColumn, sortDirection]);
 
-  const handleCreateCentralBook = (e: React.FormEvent) => {
+  const handlePullFromGoogleSheet = async () => {
+    if (!onPullFromGoogleSheet) return;
+    setIsPulling(true);
+    setSyncNotice(null);
+    try {
+      const result = await onPullFromGoogleSheet();
+      setSyncNotice({
+        type: 'success',
+        text: `Sync ข้อมูลจาก Google Sheet สำเร็จ! ดึงข้อมูลล่าสุดทั้งหมด ${result.books.length.toLocaleString()} เล่ม เรียบร้อยแล้ว`,
+      });
+    } catch (err: any) {
+      console.error('Pull from Google Sheet error:', err);
+      setSyncNotice({
+        type: 'error',
+        text: `ไม่สามารถดึงข้อมูลจาก Google Sheet ได้: ${err?.message || 'โปรดตรวจสอบการเชื่อมต่ออินเทอร์เน็ตหรือสิทธิ์แชร์ของชีต'}`,
+      });
+    } finally {
+      setIsPulling(false);
+    }
+  };
+
+  const handleCreateCentralBook = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newBookTitle.trim()) return;
+    if (!newBookTitle.trim() || isSavingBook) return;
 
-    // Atomically allocate next unique L code that has never been used
-    const assignedLCode = StorageService.allocateNextLCode();
+    setIsSavingBook(true);
+    setSyncNotice(null);
 
-    const newBook: Book = {
-      id: `book-${Date.now()}-${assignedLCode}`,
-      code: assignedLCode,
-      title: newBookTitle.trim(),
-      category: newBookCategory,
-      price: newBookPrice,
-      status: 'Available',
-      source: 'Library',
-      coverImage: newBookCover,
-      createdAt: new Date().toISOString(),
-      exchangeCount: 1,
-    };
+    try {
+      // Atomically allocate next unique L code that has never been used
+      const assignedLCode = StorageService.allocateNextLCode();
 
-    const updated = StorageService.sortBooks([newBook, ...books]);
-    StorageService.saveBooks(updated);
-    onUpdateBooks(updated);
+      const newBook: Book = {
+        id: `book-${Date.now()}-${assignedLCode}`,
+        code: assignedLCode,
+        title: newBookTitle.trim(),
+        category: newBookCategory,
+        price: newBookPrice,
+        status: 'Available',
+        source: 'Library',
+        coverImage: newBookCover,
+        createdAt: new Date().toISOString(),
+        exchangeCount: 1,
+      };
 
-    setNewBookTitle('');
-    setNewBookPrice(200);
-    setNewBookCover(undefined);
-    setIsAddModalOpen(false);
+      const updated = StorageService.sortBooks([newBook, ...books]);
+      StorageService.saveBooks(updated);
+      onUpdateBooks(updated);
 
-    if (onSyncToGoogle) onSyncToGoogle(updated);
+      if (onAddBookToGoogle) {
+        const res = await onAddBookToGoogle(newBook, updated);
+        if (res.synced) {
+          setSyncNotice({
+            type: 'success',
+            text: `เพิ่มหนังสือ "${newBook.title}" (รหัส ${newBook.code}) และบันทึกลง Google Sheet ทันทีเรียบร้อยแล้ว!`,
+          });
+        } else if (res.reason === 'no_auth') {
+          setSyncNotice({
+            type: 'info',
+            text: `เพิ่มหนังสือ "${newBook.title}" (รหัส ${newBook.code}) ในเครื่องแล้ว กรุณาลงชื่อเข้าใช้ด้วย Google เพื่อให้ระบบบันทึกลง Google Sheet`,
+          });
+        } else {
+          setSyncNotice({
+            type: 'error',
+            text: `เพิ่มหนังสือรหัส ${newBook.code} ในเครื่องแล้ว แต่บันทึกขึ้น Google Sheet ไม่สำเร็จ: ${res.error || 'โปรดตรวจสอบสิทธิ์การแก้ไขชีต'}`,
+          });
+        }
+      } else if (onSyncToGoogle) {
+        await onSyncToGoogle(updated);
+      }
+
+      setNewBookTitle('');
+      setNewBookPrice(200);
+      setNewBookCover(undefined);
+      setIsAddModalOpen(false);
+    } finally {
+      setIsSavingBook(false);
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -173,39 +235,47 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
   };
 
   return (
-    <div className="pb-24 pt-3 max-w-5xl mx-auto px-4 min-h-[calc(100vh-8rem)] font-sans space-y-4">
+    <div className="pb-24 pt-5 max-w-6xl mx-auto px-4 min-h-[calc(100vh-8rem)] font-sans space-y-4">
       {/* 1. Top Header Card */}
-      <div className="bg-[#FAF5EE] border border-[#EADBCC] rounded-2xl sm:rounded-3xl p-5 sm:p-6 shadow-[0_4px_24px_rgba(122,75,48,0.04)]">
-        <h1 className="text-lg sm:text-xl font-bold text-[#263238] tracking-tight">
+      <div className="bg-[#FFFCF7]/95 backdrop-blur-sm border border-[#EAE0D2] rounded-[28px] sm:rounded-[34px] p-5 sm:p-6 shadow-[0_18px_48px_rgba(92,58,33,0.09)]">
+        <h1 className="text-lg sm:text-xl font-bold text-[#4E342E] tracking-tight">
           ระบบแลกเปลี่ยนหนังสือ สำนักหอสมุด
         </h1>
-        <p className="text-xs text-[#8A7E74] font-medium mt-1">
-          ส่วนการจัดการสำหรับเจ้าหน้าที่ (Admin)
+        <p className="text-xs text-[#7E7369] font-medium mt-1">
+          ส่วนการจัดการสำหรับเจ้าหน้าที่ (Book List)
         </p>
       </div>
 
       {/* 2. Sub-header Navigation Pill Bar + Action Button */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         {/* Navigation Tabs Pill */}
-        <div className="bg-white/95 border border-[#EADBCC] rounded-2xl p-1 flex items-center shadow-xs">
+        <div className="bg-[#FFFCF7]/95 border border-[#EAE0D2] rounded-full p-1.5 flex items-center gap-1 shadow-xs flex-wrap">
+          <button
+            type="button"
+            onClick={() => onSelectTab?.('kiosk')}
+            className="text-[#3B4C1D] bg-[#E9EBC8]/70 hover:bg-[#DCE7C4] px-4 py-2 rounded-full text-xs sm:text-sm font-semibold transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1.5"
+          >
+            <BookOpen className="w-3.5 h-3.5 shrink-0" />
+            <span>แลกเปลี่ยนหนังสือ</span>
+          </button>
           <button
             type="button"
             onClick={() => onSelectTab?.('dashboard')}
-            className="text-[#4D4D4D] hover:text-[#2A3B4C] px-4 py-2 rounded-xl text-xs sm:text-sm font-medium transition-colors cursor-pointer"
+            className="text-[#4E342E] hover:bg-[#F8F2E7] px-4 py-2 rounded-full text-xs sm:text-sm font-medium transition-colors cursor-pointer whitespace-nowrap"
           >
             Dashboard
           </button>
           <button
             type="button"
             onClick={() => onSelectTab?.('books')}
-            className="bg-[#2A3B4C] text-white px-5 py-2 rounded-xl text-xs sm:text-sm font-medium shadow-xs transition-colors cursor-pointer"
+            className="bg-[#7D502E] text-white px-5 py-2 rounded-full text-xs sm:text-sm font-semibold shadow-xs transition-colors cursor-pointer whitespace-nowrap"
           >
             Book List
           </button>
           <button
             type="button"
             onClick={() => onSelectTab?.('settings')}
-            className="text-[#4D4D4D] hover:text-[#2A3B4C] px-4 py-2 rounded-xl text-xs sm:text-sm font-medium transition-colors cursor-pointer"
+            className="text-[#4E342E] hover:bg-[#F8F2E7] px-4 py-2 rounded-full text-xs sm:text-sm font-medium transition-colors cursor-pointer whitespace-nowrap"
           >
             ตั้งค่าระบบ
           </button>
@@ -215,41 +285,33 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
         <button
           type="button"
           onClick={() => setIsAddModalOpen(true)}
-          className="bg-[#2A3B4C] hover:bg-[#1E2B38] active:scale-[0.98] text-white px-5 py-2.5 rounded-xl text-xs sm:text-sm font-medium shadow-xs transition-all cursor-pointer tracking-tight"
+          className="bg-gradient-to-r from-[#875835] to-[#744829] hover:from-[#754B2B] hover:to-[#603A1F] active:scale-[0.98] text-white px-5 py-2 rounded-full text-xs sm:text-sm font-semibold shadow-xs transition-all cursor-pointer"
         >
-          เพิ่มหนังสือ
+          + เพิ่มหนังสือ
         </button>
       </div>
 
       {/* 3. Main Card: รายการหนังสือทั้งหมดในระบบ */}
-      <div
-        style={{
-          paddingTop: '20px',
-          paddingBottom: '20px',
-          paddingLeft: '20px',
-          paddingRight: '20px',
-        }}
-        className="bg-[#FAF5EE] border border-[#EADBCC] rounded-2xl sm:rounded-3xl shadow-xs space-y-4"
-      >
+      <div className="bg-[#FFFCF7]/95 backdrop-blur-sm border border-[#EAE0D2] rounded-[28px] sm:rounded-[34px] p-5 sm:p-6 shadow-[0_18px_48px_rgba(92,58,33,0.09)] space-y-4">
         {/* Card Header & Controls Strip */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-1">
-          <h2 className="text-[#263238] font-bold text-base sm:text-lg">
+          <h2 className="text-[#4E342E] font-bold text-base sm:text-lg">
             รายการหนังสือทั้งหมดในระบบ
           </h2>
 
-          <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
             {/* Status Dropdown */}
             <div className="relative">
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="appearance-none bg-white border border-[#EADBCC] rounded-xl pl-3 pr-8 py-2 text-xs text-[#263238] font-medium shadow-xs focus:outline-none focus:ring-1 focus:ring-[#7A4B30] cursor-pointer"
+                className="appearance-none bg-white border border-[#E5D8C8] rounded-full pl-3.5 pr-8 py-2 text-xs text-[#3E2723] font-medium shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#7D502E] cursor-pointer"
               >
                 <option value="all">สถานะทั้งหมด</option>
                 <option value="Available">Available (พร้อมแลก)</option>
                 <option value="Matched">Matched (แลกแล้ว)</option>
               </select>
-              <ChevronDown className="w-3.5 h-3.5 text-[#717171] absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <ChevronDown className="w-3.5 h-3.5 text-[#7E7369] absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
 
             {/* Search Input */}
@@ -259,33 +321,25 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                 placeholder="ค้นหารหัส หรือ ชื่อเรื่อง..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full sm:w-56 bg-white border border-[#EADBCC] rounded-xl px-3.5 py-2 text-xs text-[#263238] placeholder-[#9A9188] shadow-xs focus:outline-none focus:ring-1 focus:ring-[#7A4B30]"
-              >
-              </input>
+                className="w-full sm:w-52 bg-white border border-[#E5D8C8] rounded-full px-4 py-2 text-xs text-[#3E2723] placeholder-[#9E9185] shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#7D502E]"
+              />
             </div>
 
-            {/* Sync to Google Sheet Button */}
-            {onSyncToGoogle && (
+            {/* Sync from Google Sheet Button */}
+            {onPullFromGoogleSheet && (
               <button
                 type="button"
-                disabled={isSyncing}
-                onClick={async () => {
-                  setIsSyncing(true);
-                  try {
-                    await onSyncToGoogle();
-                  } finally {
-                    setIsSyncing(false);
-                  }
-                }}
-                className="bg-[#E8F5E9] hover:bg-[#C8E6C9] text-[#1E5C3B] border border-[#A2D4BB] rounded-xl px-3.5 py-2 text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-50"
-                title="ซิงค์ข้อมูลหนังสือทั้งหมดขึ้น Google Sheet ทันที"
+                disabled={isPulling}
+                onClick={handlePullFromGoogleSheet}
+                className="bg-[#DCE7C4] hover:bg-[#CEDEB0] text-[#4B5E26] border border-[#C3D3A6] rounded-full px-4 py-2 text-xs font-semibold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-50"
+                title="ดึงข้อมูลหนังสือล่าสุดจาก Google Sheet เข้ามาแสดงในระบบ"
               >
-                {isSyncing ? (
+                {isPulling ? (
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <UploadCloud className="w-3.5 h-3.5 text-[#2E7D32]" />
+                  <DownloadCloud className="w-3.5 h-3.5 text-[#4B5E26]" />
                 )}
-                <span>{isSyncing ? 'กำลังซิงค์...' : 'ซิงค์ขึ้น Google Sheet'}</span>
+                <span>{isPulling ? 'กำลัง Sync...' : 'Sync จาก Google Sheet'}</span>
               </button>
             )}
 
@@ -293,7 +347,7 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
             <button
               type="button"
               onClick={() => StorageService.exportBooksToExcel(books)}
-              className="bg-[#BEE5D3] hover:bg-[#A9DAC1] text-[#1E5C3B] border border-[#A2D4BB] rounded-xl px-3.5 py-2 text-xs font-medium shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+              className="bg-[#F8F2E7] hover:bg-[#EFE2CA] text-[#5C3A21] border border-[#E5D8C8] rounded-full px-4 py-2 text-xs font-semibold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
               title="ดาวน์โหลดไฟล์ Excel"
             >
               <Download className="w-3.5 h-3.5" />
@@ -302,67 +356,94 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
           </div>
         </div>
 
+        {/* Sync Feedback Banner */}
+        {syncNotice && (
+          <div
+            className={`p-3 rounded-2xl text-xs flex items-center gap-2 shadow-2xs ${
+              syncNotice.type === 'success'
+                ? 'bg-[#DCE7C4]/80 text-[#3B4C1D] border border-[#CBD6A6]'
+                : syncNotice.type === 'info'
+                  ? 'bg-[#F8F2E7] text-[#5C3A21] border border-[#E5D8C8]'
+                  : 'bg-[#FADBD2] text-[#8B3A2B] border border-[#F0BFB2]'
+            }`}
+          >
+            {syncNotice.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-[#4B5E26]" />
+            ) : (
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+            )}
+            <span className="flex-1">{syncNotice.text}</span>
+            <button
+              type="button"
+              onClick={() => setSyncNotice(null)}
+              className="text-xs opacity-60 hover:opacity-100 cursor-pointer ml-2"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Data Table */}
-        <div className="overflow-x-auto rounded-xl">
+        <div className="overflow-x-auto rounded-2xl">
           <table className="w-full text-left border-collapse min-w-[720px]">
             <thead>
-              <tr className="border-b border-[#EADBCC]/60 text-[#263238] text-xs font-semibold">
+              <tr className="border-b border-[#EAE0D2] text-[#4E342E] text-xs font-semibold">
                 <th className="py-3 px-3 w-16 text-center">หน้าปก</th>
                 <th
                   onClick={() => handleSort('code')}
                   style={{ width: '122.583px' }}
-                  className="py-3 px-3 cursor-pointer hover:text-[#7A4B30] transition-colors select-none"
+                  className="py-3 px-3 cursor-pointer hover:text-[#7D502E] transition-colors select-none"
                 >
                   <div className="flex items-center gap-1">
                     <span>รหัสหนังสือ</span>
-                    <ChevronsUpDown className="w-3 h-3 text-[#8A7E74]" />
+                    <ChevronsUpDown className="w-3 h-3 text-[#8E8176]" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort('title')}
-                  className="py-3 px-3 cursor-pointer hover:text-[#7A4B30] transition-colors select-none"
+                  className="py-3 px-3 cursor-pointer hover:text-[#7D502E] transition-colors select-none"
                 >
                   <div className="flex items-center gap-1">
                     <span>ชื่อเรื่อง</span>
-                    <ChevronsUpDown className="w-3 h-3 text-[#8A7E74]" />
+                    <ChevronsUpDown className="w-3 h-3 text-[#8E8176]" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort('category')}
-                  className="py-3 px-3 cursor-pointer hover:text-[#7A4B30] transition-colors select-none"
+                  className="py-3 px-3 cursor-pointer hover:text-[#7D502E] transition-colors select-none"
                 >
                   <div className="flex items-center gap-1">
                     <span>หมวดหมู่</span>
-                    <ChevronsUpDown className="w-3 h-3 text-[#8A7E74]" />
+                    <ChevronsUpDown className="w-3 h-3 text-[#8E8176]" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort('source')}
-                  className="py-3 px-3 cursor-pointer hover:text-[#7A4B30] transition-colors select-none"
+                  className="py-3 px-3 cursor-pointer hover:text-[#7D502E] transition-colors select-none"
                 >
                   <div className="flex items-center gap-1">
                     <span>ที่มา</span>
-                    <ChevronsUpDown className="w-3 h-3 text-[#8A7E74]" />
+                    <ChevronsUpDown className="w-3 h-3 text-[#8E8176]" />
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort('status')}
-                  className="py-3 px-3 text-center cursor-pointer hover:text-[#7A4B30] transition-colors select-none"
+                  className="py-3 px-3 text-center cursor-pointer hover:text-[#7D502E] transition-colors select-none"
                 >
                   <div className="flex items-center justify-center gap-1">
                     <span>สถานะ</span>
-                    <ChevronsUpDown className="w-3 h-3 text-[#8A7E74]" />
+                    <ChevronsUpDown className="w-3 h-3 text-[#8E8176]" />
                   </div>
                 </th>
                 <th className="py-3 px-3 text-center">จัดการ</th>
               </tr>
             </thead>
 
-            <tbody className="divide-y divide-[#EADBCC]/40 text-xs text-[#263238]">
+            <tbody className="divide-y divide-[#EAE0D2]/70 text-xs text-[#3E2723]">
               {sortedBooks.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-[#717171]">
-                    <BookOpen className="w-8 h-8 mx-auto mb-2 opacity-30 text-[#717171]" />
+                  <td colSpan={7} className="py-12 text-center text-[#7E7369]">
+                    <BookOpen className="w-8 h-8 mx-auto mb-2 opacity-30 text-[#7E7369]" />
                     <span>ไม่พบข้อมูลหนังสือตามเงื่อนไขที่เลือก</span>
                   </td>
                 </tr>
@@ -380,7 +461,7 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                       <td className="py-3.5 px-3 text-center">
                         <div
                           onClick={() => setViewingBook(book)}
-                          className="w-10 h-13 rounded-lg bg-white border border-[#EADBCC] shadow-xs flex flex-col items-center justify-center overflow-hidden cursor-pointer mx-auto transition-transform hover:scale-105"
+                          className="w-10 h-13 rounded-xl bg-white border border-[#EAE0D2] shadow-xs flex flex-col items-center justify-center overflow-hidden cursor-pointer mx-auto transition-transform hover:scale-105"
                           title="ดูหน้าปก / ข้อมูล"
                         >
                           {book.coverImage ? (
@@ -390,7 +471,7 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                               className="w-full h-full object-cover"
                             />
                           ) : (
-                            <div className="text-[9px] text-[#8A7E74] leading-tight text-center font-medium">
+                            <div className="text-[9px] text-[#7E7369] leading-tight text-center font-medium">
                               เพิ่ม
                               <br />
                               รูป
@@ -402,42 +483,42 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                       {/* รหัสหนังสือ */}
                       <td
                         style={{ width: '122.583px', height: '76.8889px' }}
-                        className="py-3.5 px-3 font-bold font-mono text-[#263238] text-xs sm:text-sm"
+                        className="py-3.5 px-3 font-bold font-mono text-[#4E342E] text-xs sm:text-sm"
                       >
                         {book.code}
                       </td>
 
                       {/* ชื่อเรื่อง */}
-                      <td className="py-3.5 px-3 font-medium text-[#263238] max-w-[220px]">
+                      <td className="py-3.5 px-3 font-medium text-[#3E2723] max-w-[220px]">
                         <span className="truncate block" title={book.title}>
                           {book.title}
                         </span>
                       </td>
 
                       {/* หมวดหมู่ */}
-                      <td className="py-3.5 px-3 text-[#263238] font-normal">
+                      <td className="py-3.5 px-3 text-[#4E342E] font-normal">
                         {formatCategory(book.category)}
                       </td>
 
                       {/* ที่มา */}
-                      <td className="py-3.5 px-3 text-[#717171] font-normal whitespace-nowrap">
+                      <td className="py-3.5 px-3 text-[#7E7369] font-normal whitespace-nowrap">
                         {formatSource(book)}
                       </td>
 
                       {/* สถานะ */}
                       <td className="py-3.5 px-3 text-center whitespace-nowrap">
                         {isAvailable ? (
-                          <span className="bg-[#A2D9C3] text-[#1E5C3B] font-semibold text-xs px-3.5 py-1 rounded-full inline-block shadow-2xs">
+                          <span className="bg-[#DCE7C4] text-[#3B4C1D] border border-[#CBD6A6] font-semibold text-xs px-3.5 py-1 rounded-full inline-block shadow-2xs">
                             Available
                           </span>
                         ) : isMatched ? (
                           <div className="inline-flex flex-col items-center gap-1">
-                            <span className="bg-[#FFB7A5] text-[#8B3A2B] font-semibold text-xs px-3.5 py-1 rounded-full inline-block shadow-2xs">
+                            <span className="bg-[#EFE2CA] text-[#7D502E] border border-[#DFCEB2] font-semibold text-xs px-3.5 py-1 rounded-full inline-block shadow-2xs">
                               Matched
                             </span>
                             {book.matchedTransactionId && (
                               <span
-                                className="font-mono text-[10px] text-[#2A3B4C] bg-[#F0F4F8] border border-[#D0DCE5] px-1.5 py-0.5 rounded font-medium"
+                                className="font-mono text-[10px] text-[#5C3A21] bg-[#F8F2E7] border border-[#E5D8C8] px-2 py-0.5 rounded-full font-medium"
                                 title="รหัส Transaction ที่ Match รายการนี้"
                               >
                                 {book.matchedTransactionId}
@@ -445,7 +526,7 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                             )}
                           </div>
                         ) : (
-                          <span className="bg-[#EADBCC] text-[#7A4B30] font-semibold text-xs px-3.5 py-1 rounded-full inline-block">
+                          <span className="bg-[#F3E7D3] text-[#5C3A21] font-semibold text-xs px-3.5 py-1 rounded-full inline-block">
                             {book.status}
                           </span>
                         )}
@@ -456,7 +537,7 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                         <button
                           type="button"
                           onClick={() => setViewingBook(book)}
-                          className="text-xs text-[#7A4B30] hover:text-[#502F1D] underline underline-offset-3 cursor-pointer font-medium"
+                          className="text-xs text-[#7D502E] hover:text-[#5C3A21] underline underline-offset-3 cursor-pointer font-semibold"
                         >
                           ดูรายละเอียด
                         </button>
@@ -473,29 +554,29 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
       {/* Modal: Add Central Book (L) */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-xs">
-          <div className="bg-[#FAF5EE] rounded-t-3xl sm:rounded-3xl w-full max-w-lg p-6 shadow-xl border border-[#EADBCC] animate-in slide-in-from-bottom-4">
-            <div className="flex items-center justify-between pb-3 border-b border-[#EADBCC] mb-4">
+          <div className="bg-[#FFFCF7] rounded-t-[28px] sm:rounded-[28px] w-full max-w-lg p-6 shadow-2xl border border-[#EAE0D2]">
+            <div className="flex items-center justify-between pb-3 border-b border-[#EFE6D8] mb-4">
               <div>
-                <h3 className="font-bold text-[#263238] text-base">
+                <h3 className="font-bold text-[#4E342E] text-base">
                   เพิ่มหนังสือสู่คลังส่วนกลาง
                 </h3>
-                <p className="text-xs text-[#8A7E74] mt-0.5">
-                  รหัสอัตโนมัติ: <strong className="font-mono text-[#2E7D32]">{nextLCode}</strong>
+                <p className="text-xs text-[#7E7369] mt-0.5">
+                  รหัสอัตโนมัติ: <strong className="font-mono text-[#4B5E26]">{nextLCode}</strong>
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setIsAddModalOpen(false)}
-                className="text-[#8A7E74] hover:text-[#263238] cursor-pointer"
+                className="w-8 h-8 rounded-full bg-white border border-[#E5D8C8] flex items-center justify-center text-[#7E7369] hover:text-[#3E2723] cursor-pointer"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
             <form onSubmit={handleCreateCentralBook} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-[#263238] mb-1.5">
-                  ชื่อเรื่องหนังสือ <span className="text-[#E53935]">*</span>
+                <label className="block text-xs font-semibold text-[#4E342E] mb-1.5">
+                  ชื่อเรื่องหนังสือ <span className="text-[#D32F2F]">*</span>
                 </label>
                 <input
                   type="text"
@@ -503,19 +584,19 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                   placeholder="เช่น Atomic Habits"
                   value={newBookTitle}
                   onChange={(e) => setNewBookTitle(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-[#D8CABE] text-xs bg-white text-[#263238] focus:outline-none focus:ring-1 focus:ring-[#7A4B30]"
+                  className="w-full px-4 py-2.5 rounded-2xl border border-[#DDD0BF] text-xs bg-white text-[#3A2D26] focus:outline-none focus:ring-2 focus:ring-[#7D502E]"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-[#263238] mb-1.5">
+                  <label className="block text-xs font-semibold text-[#4E342E] mb-1.5">
                     หมวดหมู่
                   </label>
                   <select
                     value={newBookCategory}
                     onChange={(e) => setNewBookCategory(e.target.value)}
-                    className="w-full px-3 py-2.5 rounded-xl border border-[#D8CABE] text-xs bg-white text-[#263238] font-medium focus:outline-none focus:ring-1 focus:ring-[#7A4B30]"
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-[#DDD0BF] text-xs bg-white text-[#3A2D26] font-medium focus:outline-none focus:ring-2 focus:ring-[#7D502E]"
                   >
                     {settings.categories.map((c) => (
                       <option key={c} value={c}>
@@ -526,7 +607,7 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-[#263238] mb-1.5">
+                  <label className="block text-xs font-semibold text-[#4E342E] mb-1.5">
                     ราคา (บาท)
                   </label>
                   <input
@@ -534,35 +615,35 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                     min="0"
                     value={newBookPrice}
                     onChange={(e) => setNewBookPrice(Number(e.target.value) || 0)}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-[#D8CABE] text-xs font-mono text-[#263238] bg-white focus:outline-none focus:ring-1 focus:ring-[#7A4B30]"
+                    className="w-full px-3.5 py-2.5 rounded-2xl border border-[#DDD0BF] text-xs font-mono text-[#3A2D26] bg-white focus:outline-none focus:ring-2 focus:ring-[#7D502E]"
                   />
                 </div>
               </div>
 
               {/* Cover photo */}
               <div>
-                <label className="block text-xs font-semibold text-[#263238] mb-1.5">
+                <label className="block text-xs font-semibold text-[#4E342E] mb-1.5">
                   รูปหน้าปก
                 </label>
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-16 rounded-xl border border-[#D8CABE] overflow-hidden bg-white flex items-center justify-center shrink-0 shadow-xs">
+                  <div className="w-12 h-16 rounded-xl border border-[#DDD0BF] overflow-hidden bg-white flex items-center justify-center shrink-0 shadow-2xs">
                     {newBookCover ? (
                       <img src={newBookCover} alt="Preview" className="w-full h-full object-cover" />
                     ) : (
-                      <BookOpen className="w-5 h-5 text-[#8A7E74] opacity-40" />
+                      <BookOpen className="w-5 h-5 text-[#7E7369] opacity-40" />
                     )}
                   </div>
                   <div className="flex gap-2 flex-1">
                     <button
                       type="button"
                       onClick={() => setIsCameraOpenForAdd(true)}
-                      className="flex-1 py-2 text-xs font-medium text-[#7A4B30] bg-[#EFE5D6] hover:bg-[#E4D8C5] rounded-xl flex items-center justify-center gap-1 border border-[#D8CABE] cursor-pointer transition-colors"
+                      className="flex-1 py-2 text-xs font-semibold text-[#5C3A21] bg-[#F8F2E7] hover:bg-[#EFE2CA] rounded-full flex items-center justify-center gap-1 border border-[#E5D8C8] cursor-pointer transition-colors"
                     >
                       <Camera className="w-3.5 h-3.5" />
                       กล้อง
                     </button>
-                    <label className="flex-1 py-2 text-xs font-medium text-[#4D4D4D] bg-white border border-[#D8CABE] rounded-xl flex items-center justify-center gap-1 cursor-pointer hover:bg-[#F9F4EB] transition-colors">
-                      <Upload className="w-3.5 h-3.5 text-[#717171]" />
+                    <label className="flex-1 py-2 text-xs font-semibold text-[#4E342E] bg-white border border-[#E5D8C8] rounded-full flex items-center justify-center gap-1 cursor-pointer hover:bg-[#F8F2E7] transition-colors">
+                      <Upload className="w-3.5 h-3.5 text-[#7D502E]" />
                       ไฟล์
                       <input
                         type="file"
@@ -575,19 +656,22 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-4 border-t border-[#EADBCC]">
+              <div className="flex items-center justify-end gap-2 pt-4 border-t border-[#EFE6D8]">
                 <button
                   type="button"
+                  disabled={isSavingBook}
                   onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 text-xs text-[#717171] hover:text-[#263238] cursor-pointer"
+                  className="px-4 py-2 text-xs text-[#6D5C50] hover:text-[#3E2723] font-medium cursor-pointer disabled:opacity-50"
                 >
                   ยกเลิก
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 text-xs font-medium text-white bg-[#2A3B4C] hover:bg-[#1E2B38] rounded-xl shadow-xs transition-colors cursor-pointer"
+                  disabled={isSavingBook}
+                  className="px-6 py-2 text-xs font-semibold text-white bg-gradient-to-r from-[#875835] to-[#744829] hover:from-[#754B2B] hover:to-[#603A1F] rounded-full shadow-xs transition-colors cursor-pointer disabled:opacity-60 flex items-center gap-1.5"
                 >
-                  บันทึกหนังสือ
+                  {isSavingBook && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isSavingBook ? 'กำลังบันทึกลง Google Sheet...' : 'บันทึกหนังสือ'}</span>
                 </button>
               </div>
             </form>
@@ -598,22 +682,26 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
       {/* Modal: View Details */}
       {viewingBook && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 backdrop-blur-xs">
-          <div className="bg-[#FAF5EE] rounded-t-3xl sm:rounded-3xl w-full max-w-md p-6 shadow-xl border border-[#EADBCC] animate-in slide-in-from-bottom-4">
-            <div className="flex items-center justify-between pb-3 border-b border-[#EADBCC] mb-4">
-              <span className="font-mono font-bold text-xs bg-[#2A3B4C] text-white px-2.5 py-1 rounded-lg">
+          <div className="bg-[#FFFCF7] rounded-t-[28px] sm:rounded-[28px] w-full max-w-md p-6 shadow-2xl border border-[#EAE0D2]">
+            <div className="flex items-center justify-between pb-3 border-b border-[#EFE6D8] mb-4">
+              <span
+                className={`font-mono font-bold text-xs text-white px-3 py-1 rounded-full ${
+                  viewingBook.code.startsWith('L') ? 'bg-[#7D502E]' : 'bg-[#4B5E26]'
+                }`}
+              >
                 {viewingBook.code}
               </span>
               <button
                 type="button"
                 onClick={() => setViewingBook(null)}
-                className="text-[#8A7E74] hover:text-[#263238] cursor-pointer"
+                className="w-8 h-8 rounded-full bg-white border border-[#E5D8C8] flex items-center justify-center text-[#7E7369] hover:text-[#3E2723] cursor-pointer"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="flex gap-4 mb-4">
-              <div className="w-20 h-28 rounded-xl overflow-hidden border border-[#D8CABE] shrink-0 bg-white shadow-xs">
+              <div className="w-20 h-28 rounded-2xl overflow-hidden border border-[#EAE0D2] shrink-0 bg-white shadow-xs">
                 <BookCover
                   title={viewingBook.title}
                   category={viewingBook.category}
@@ -622,58 +710,58 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                 />
               </div>
               <div className="flex-1 text-xs space-y-1.5">
-                <h4 className="font-bold text-sm text-[#263238] line-clamp-2">
+                <h4 className="font-bold text-sm text-[#4E342E] line-clamp-2">
                   {viewingBook.title}
                 </h4>
-                <div className="text-xs text-[#717171]">
-                  หมวด: <strong className="text-[#263238] font-medium">{viewingBook.category}</strong>
+                <div className="text-xs text-[#7E7369]">
+                  หมวด: <strong className="text-[#4E342E] font-medium">{viewingBook.category}</strong>
                 </div>
-                <div className="text-xs text-[#717171]">
-                  ราคา: <span className="font-mono font-bold text-[#2E7D32]">฿{viewingBook.price}</span>
+                <div className="text-xs text-[#7E7369]">
+                  ราคา: <span className="font-mono font-bold text-[#4B5E26]">฿{viewingBook.price}</span>
                 </div>
-                <div className="text-xs text-[#717171]">
-                  แหล่งที่มา: <span className="font-medium text-[#263238]">{viewingBook.source === 'Library' ? 'ส่วนกลาง (L)' : 'ผู้แลก (U)'}</span>
+                <div className="text-xs text-[#7E7369]">
+                  แหล่งที่มา: <span className="font-medium text-[#4E342E]">{viewingBook.source === 'Library' ? 'ส่วนกลาง (L)' : 'ผู้แลก (U)'}</span>
                 </div>
                 {viewingBook.memberType && (
-                  <div className="text-xs text-[#717171]">
-                    กลุ่มผู้แลก: <span className="font-medium text-[#263238]">{viewingBook.memberType}</span>
+                  <div className="text-xs text-[#7E7369]">
+                    กลุ่มผู้แลก: <span className="font-medium text-[#4E342E]">{viewingBook.memberType}</span>
                   </div>
                 )}
-                <div className="text-xs text-[#717171]">
+                <div className="text-xs text-[#7E7369]">
                   สถานะ:{' '}
                   {viewingBook.status === 'Available' ? (
-                    <span className="bg-[#A2D9C3] text-[#1E5C3B] font-semibold text-[11px] px-2.5 py-0.5 rounded-full inline-block">
+                    <span className="bg-[#DCE7C4] text-[#3B4C1D] border border-[#CBD6A6] font-semibold text-[11px] px-2.5 py-0.5 rounded-full inline-block">
                       Available
                     </span>
                   ) : viewingBook.status === 'Matched' ? (
-                    <span className="bg-[#FFB7A5] text-[#8B3A2B] font-semibold text-[11px] px-2.5 py-0.5 rounded-full inline-block">
+                    <span className="bg-[#EFE2CA] text-[#7D502E] border border-[#DFCEB2] font-semibold text-[11px] px-2.5 py-0.5 rounded-full inline-block">
                       Matched
                     </span>
                   ) : (
-                    <span className="bg-[#EADBCC] text-[#7A4B30] font-semibold text-[11px] px-2.5 py-0.5 rounded-full inline-block">
+                    <span className="bg-[#F3E7D3] text-[#5C3A21] font-semibold text-[11px] px-2.5 py-0.5 rounded-full inline-block">
                       {viewingBook.status}
                     </span>
                   )}
                 </div>
 
                 {viewingBook.matchedTransactionId && (
-                  <div className="text-xs text-[#717171]">
+                  <div className="text-xs text-[#7E7369]">
                     Transaction ที่ Match:{' '}
-                    <span className="font-mono font-bold text-[#2A3B4C] bg-[#F5F7FA] border border-[#E8ECF2] px-1.5 py-0.5 rounded">
+                    <span className="font-mono font-bold text-[#5C3A21] bg-[#F8F2E7] border border-[#E5D8C8] px-2 py-0.5 rounded-full">
                       {viewingBook.matchedTransactionId}
                     </span>
                   </div>
                 )}
                 {viewingBook.matchedWithCode && (
-                  <div className="text-xs text-[#717171]">
+                  <div className="text-xs text-[#7E7369]">
                     แลกคู่กับรหัส:{' '}
-                    <span className="font-mono font-bold text-[#7A4B30]">
+                    <span className="font-mono font-bold text-[#7D502E]">
                       {viewingBook.matchedWithCode}
                     </span>
                   </div>
                 )}
                 {viewingBook.matchedAt && (
-                  <div className="text-[11px] text-[#8A7E74]">
+                  <div className="text-[11px] text-[#8E8176]">
                     เวลาที่แลก:{' '}
                     <span>
                       {new Date(viewingBook.matchedAt).toLocaleString('th-TH')}
@@ -684,17 +772,17 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
             </div>
 
             {/* Toggle Status Action */}
-            <div className="bg-white/90 border border-[#EADBCC] rounded-2xl p-3.5 text-xs space-y-2 mb-4 shadow-xs">
-              <div className="text-[11px] text-[#717171]">
+            <div className="bg-[#F8F2E7] border border-[#E5D8C8] rounded-2xl p-3.5 text-xs space-y-2 mb-4 shadow-xs">
+              <div className="text-[11px] text-[#7E7369]">
                 สลับสถานะหนังสือ:
               </div>
               <button
                 type="button"
                 onClick={() => handleToggleStatus(viewingBook)}
-                className={`w-full py-2 rounded-xl text-xs font-semibold shadow-xs transition-colors cursor-pointer ${
+                className={`w-full py-2.5 rounded-full text-xs font-semibold shadow-xs transition-colors cursor-pointer ${
                   viewingBook.status === 'Available'
-                    ? 'bg-[#FFB7A5] hover:bg-[#FFA590] text-[#8B3A2B]'
-                    : 'bg-[#A2D9C3] hover:bg-[#90CFB5] text-[#1E5C3B]'
+                    ? 'bg-[#EFE2CA] hover:bg-[#E5D3B3] text-[#5C3A21] border border-[#DFCEB2]'
+                    : 'bg-[#DCE7C4] hover:bg-[#CEDDA9] text-[#3B4C1D] border border-[#CBD6A6]'
                 }`}
               >
                 {viewingBook.status === 'Available'
@@ -707,7 +795,7 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
               <button
                 type="button"
                 onClick={() => setViewingBook(null)}
-                className="px-4 py-2 text-xs font-medium text-[#4D4D4D] hover:text-[#263238] bg-white border border-[#D8CABE] rounded-xl cursor-pointer shadow-xs"
+                className="px-5 py-2 text-xs font-semibold text-[#5C3A21] hover:bg-[#F8F2E7] bg-white border border-[#E5D8C8] rounded-full cursor-pointer shadow-xs"
               >
                 ปิด
               </button>

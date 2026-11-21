@@ -13,14 +13,28 @@ const STORAGE_KEYS = {
 
 export const ACTIVE_SPREADSHEET_ID = '1ppG2ExLSTl5pb1TS47pW2aNvqMVID8qvXwrB3_uOSm0';
 
+export const normalizeCategory = (cat?: string): string => {
+  if (!cat) return 'หนังสือทั่วไป';
+  const trimmed = cat.trim();
+  if (trimmed.includes('เรียน') || trimmed.includes('วิชาการ')) return 'หนังสือเรียน/วิชาการ';
+  if (trimmed.includes('การ์ตูน') || trimmed.includes('มังงะ')) return 'การ์ตูน/มังงะ';
+  if (trimmed.includes('นวนิยาย') || (trimmed.includes('วรรณกรรม') && !trimmed.includes('เยาวชน'))) return 'นวนิยาย/วรรณกรรม';
+  if (trimmed.includes('เยาวชน')) return 'หนังสือเยาวชน';
+  if (trimmed.includes('พัฒนาตนเอง') || trimmed.includes('จิตวิ')) return 'พัฒนาตนเอง/จิตวิทยา';
+  if (trimmed.includes('เรื่องสั้น')) return 'เรื่องสั้น/รวมเรื่อง';
+  if (trimmed.includes('ทั่วไป')) return 'หนังสือทั่วไป';
+  return trimmed;
+};
+
 export const INITIAL_SETTINGS: SystemSettings = {
   categories: [
     'หนังสือทั่วไป',
-    'หนังสือเรียน',
+    'หนังสือเรียน/วิชาการ',
     'หนังสือเยาวชน',
-    'การ์ตูน',
-    'เรื่องสั้น',
-    'นวนิยาย',
+    'การ์ตูน/มังงะ',
+    'นวนิยาย/วรรณกรรม',
+    'พัฒนาตนเอง/จิตวิทยา',
+    'เรื่องสั้น/รวมเรื่อง',
   ],
   exchangeTerms: `1. หนังสือที่นำมาแลกต้องอยู่ในสภาพดี ไม่ฉีกขาด
 2. สามารถแลกหนังสือได้ตามจำนวนที่นำมาเท่านั้น
@@ -226,9 +240,15 @@ export class StorageService {
           ? ACTIVE_SPREADSHEET_ID
           : currentId;
 
+      const rawCats = Array.isArray(parsed.categories) && parsed.categories.length > 0
+        ? parsed.categories
+        : INITIAL_SETTINGS.categories;
+      const deduplicatedCats = Array.from(new Set(rawCats.map((c: string) => normalizeCategory(c))));
+
       const merged: SystemSettings = {
         ...INITIAL_SETTINGS,
         ...parsed,
+        categories: deduplicatedCats,
         connectedSpreadsheetId,
         participationHistoryOptions:
           Array.isArray(parsed.participationHistoryOptions) && parsed.participationHistoryOptions.length > 0

@@ -1,9 +1,5 @@
 import React from 'react';
-import {
-  BookMarked,
-  ShieldCheck,
-  LogOut,
-} from 'lucide-react';
+import { ShieldCheck, LogOut, BookOpen, LayoutDashboard } from 'lucide-react';
 
 interface NavbarProps {
   currentTab: 'kiosk' | 'dashboard' | 'books' | 'settings';
@@ -27,72 +23,101 @@ export const Navbar: React.FC<NavbarProps> = ({
   googleConnected,
 }) => {
   return (
-    <>
-      {/* Mobile Top Header (Sticky Top App Bar) */}
-      <header className="sticky top-0 z-40 bg-[#FAF5EE]/95 backdrop-blur-md text-[#332D29] shadow-xs border-b border-[#EADBCC]">
-        <div className="max-w-md mx-auto sm:max-w-2xl lg:max-w-5xl px-4 h-14 flex items-center justify-between">
-          {/* Brand Slot */}
-          <div
-            onClick={() => {
-              if (onGoHome) {
-                onGoHome();
-              } else {
-                onSelectTab('kiosk');
-              }
-            }}
-            role="button"
-            tabIndex={0}
-            className="flex items-center gap-2.5 cursor-pointer active:scale-95 transition-transform"
-          >
-            <div className="w-8 h-8 rounded-xl bg-[#EFE5D6] border border-[#E0D2BE] flex items-center justify-center text-[#7A4B30] shadow-xs">
-              <BookMarked className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="text-base font-bold tracking-tight text-[#7A4B30]">
-                CMU Library :
-              </div>
-              <div className="text-[10px] text-[#8A7E74] font-medium -mt-1">
-                Exchange Book Project
-              </div>
+    <header className="sticky top-0 z-40 bg-[#FAF3E6]/75 backdrop-blur-md text-[#3A2D26] border-b border-[#EAE0D2]/70">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+        {/* Brand Slot */}
+        <div
+          onClick={() => {
+            if (onGoHome) {
+              onGoHome();
+            } else {
+              onSelectTab('kiosk');
+            }
+          }}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              if (onGoHome) onGoHome();
+              else onSelectTab('kiosk');
+            }
+          }}
+          className="flex items-center gap-3 cursor-pointer active:scale-95 transition-transform shrink-0"
+        >
+          {/* CMU Library Logo */}
+          <div className="h-9 sm:h-10 flex items-center shrink-0">
+            <img
+              src="/assets/aistudio/image_f1c30ab4.png"
+              alt="CMU Library Logo"
+              className="h-8 sm:h-9 w-auto object-contain"
+            />
+          </div>
+          <div className="flex items-center">
+            <div className="text-[22px] text-[#753f0c] font-bold whitespace-nowrap">
+              Exchange Book Project
             </div>
           </div>
+        </div>
 
-          {/* Right Action: Admin Profile / Login trigger */}
-          <div className="flex items-center gap-2">
-            {googleConnected && (
-              <span
-                className="w-2.5 h-2.5 rounded-full bg-[#2E7D32] ring-2 ring-[#EBF5EE]"
-                title="Google Sheets & Drive เชื่อมต่อแล้ว"
-              />
-            )}
+        {/* Right Action: Status dot + Mode Switcher + Staff Login Pill */}
+        <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+          {googleConnected && (
+            <span
+              className="w-2.5 h-2.5 rounded-full bg-[#388E3C] ring-2 ring-[#E8F5E9] shrink-0"
+              title="เชื่อมต่อ Google Sheet เรียบร้อยแล้ว"
+            />
+          )}
 
-            {isAdminLoggedIn ? (
-              <div className="flex items-center gap-1.5 bg-[#F5E2CC] px-2.5 py-1 rounded-full text-xs font-medium text-[#7A4B30] border border-[#E0D2BE]">
-                <ShieldCheck className="w-3.5 h-3.5 text-[#7A4B30]" />
-                <span className="max-w-[80px] sm:max-w-[120px] truncate">{adminUsername || 'Admin'}</span>
-                <button
-                  onClick={onAdminLogout}
-                  className="ml-1 text-[#8A7E74] hover:text-[#D32F2F] p-0.5 cursor-pointer"
-                  title="ออกจากระบบ"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                </button>
-              </div>
+          {isAdminLoggedIn && (
+            currentTab === 'kiosk' ? (
+              <button
+                type="button"
+                onClick={() => onSelectTab('dashboard')}
+                className="flex items-center gap-1.5 bg-[#7D502E] hover:bg-[#653F22] active:scale-95 text-white px-3.5 py-1.5 rounded-full text-xs font-semibold shadow-xs transition-all cursor-pointer whitespace-nowrap shrink-0"
+                title="สลับไปหน้า Dashboard เจ้าหน้าที่"
+              >
+                <LayoutDashboard className="w-3.5 h-3.5 shrink-0" />
+                <span>หน้าเจ้าหน้าที่ (Dashboard)</span>
+              </button>
             ) : (
               <button
                 type="button"
-                onClick={onOpenAdminLogin}
-                className="flex items-center gap-1.5 bg-[#EFE5D6] hover:bg-[#E5D7C3] active:scale-95 text-[#7A4B30] border border-[#E0D2BE] px-3 py-1.5 rounded-full text-xs font-semibold shadow-2xs transition-all cursor-pointer"
-                title="เข้าสู่ระบบเจ้าหน้าที่ หรือเชื่อมต่อ Super User (Google)"
+                onClick={() => onSelectTab('kiosk')}
+                className="flex items-center gap-1.5 bg-[#4B5E26] hover:bg-[#3B4B1D] active:scale-95 text-white px-3.5 py-1.5 rounded-full text-xs font-semibold shadow-xs transition-all cursor-pointer whitespace-nowrap shrink-0"
+                title="กลับไปใช้งานหน้าแลกเปลี่ยนหนังสือ"
               >
-                <ShieldCheck className="w-3.5 h-3.5 text-[#7A4B30]" />
-                <span className="hidden sm:inline">เข้าสู่ระบบ / เชื่อมต่อ Super User</span>
-                <span className="sm:hidden">เข้าสู่ระบบ</span>
+                <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                <span>แลกเปลี่ยนหนังสือ</span>
               </button>
-            )}
-          </div>
+            )
+          )}
+
+          {isAdminLoggedIn ? (
+            <div className="flex items-center gap-1.5 bg-[#F3E7D3] px-3.5 py-1.5 rounded-full text-xs font-semibold text-[#5C3A21] border border-[#E0CEB5] shadow-2xs">
+              <ShieldCheck className="w-3.5 h-3.5 text-[#5C3A21] shrink-0" />
+              <span className="max-w-[90px] sm:max-w-[140px] truncate">{adminUsername || 'Admin'}</span>
+              <button
+                type="button"
+                onClick={onAdminLogout}
+                className="ml-1 text-[#7E7369] hover:text-[#D32F2F] p-0.5 cursor-pointer transition-colors"
+                title="ออกจากระบบ"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenAdminLogin}
+              className="flex items-center gap-2 bg-[#F3E7D3] hover:bg-[#EAD9BE] active:scale-95 text-[#5C3A21] border border-[#E0CEB5] px-4 py-2 rounded-full text-xs font-semibold shadow-xs transition-all cursor-pointer whitespace-nowrap shrink-0"
+              title="Staff Login"
+            >
+              <ShieldCheck className="w-4 h-4 text-[#5C3A21] shrink-0" />
+              <span>Staff Login</span>
+            </button>
+          )}
         </div>
-      </header>
-    </>
+      </div>
+    </header>
   );
 };

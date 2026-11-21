@@ -102,6 +102,19 @@ export async function writeHeaders(accessToken: string, spreadsheetId: string): 
   );
 }
 
+function getSafeSheetCoverValue(book: Book): string {
+  if (book.coverImage && !book.coverImage.startsWith('data:')) {
+    return book.coverImage;
+  }
+  if (book.driveFileId) {
+    return `https://drive.google.com/uc?export=view&id=${book.driveFileId}`;
+  }
+  if (book.coverImage && book.coverImage.length < 45000) {
+    return book.coverImage;
+  }
+  return '';
+}
+
 export async function appendBookToSheet(
   accessToken: string,
   spreadsheetId: string,
@@ -116,7 +129,7 @@ export async function appendBookToSheet(
     book.source,
     book.memberType || '',
     book.driveFileId || '',
-    book.coverImage || '',
+    getSafeSheetCoverValue(book),
     book.createdAt,
     book.matchedAt || '',
     book.matchedWithCode || '',
@@ -126,7 +139,7 @@ export async function appendBookToSheet(
     book.matchedTransactionId || '',
   ];
 
-  await fetch(
+  const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A:P:append?valueInputOption=USER_ENTERED`,
     {
       method: 'POST',
@@ -139,6 +152,11 @@ export async function appendBookToSheet(
       }),
     }
   );
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`ไม่สามารถบันทึกหนังสือลง Google Sheet ได้ (${res.status}): ${errText || res.statusText}`);
+  }
 }
 
 export async function appendTransactionToSheet(
@@ -243,19 +261,18 @@ export async function fetchPublicSheetCSV(
   spreadsheetId: string,
   sheetName: string
 ): Promise<string[][]> {
+  const cacheBuster = Date.now();
+
   // 1. Try server-side proxy route first (no browser CORS restrictions)
   try {
     const proxyUrl = `/api/sheet-data?id=${encodeURIComponent(spreadsheetId)}&sheet=${encodeURIComponent(
       sheetName
-    )}`;
-    const res = await fetch(proxyUrl);
+    )}&_t=${cacheBuster}`;
+    const res = await fetch(proxyUrl, { cache: 'no-store' });
     if (res.ok) {
       const text = await res.text();
-      if (text && !text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
-        const parsed = parseCSV(text);
-        if (parsed.length > 0) {
-          return parsed;
-        }
+      if (!text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
+        return parseCSV(text);
       }
     } else {
       const errJson = await res.json().catch(() => null);
@@ -275,13 +292,12 @@ export async function fetchPublicSheetCSV(
   try {
     const gvizUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
       sheetName
-    )}`;
-    const res = await fetch(gvizUrl);
+    )}&_t=${cacheBuster}`;
+    const res = await fetch(gvizUrl, { cache: 'no-store' });
     if (res.ok) {
       const text = await res.text();
       if (!text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
-        const parsed = parseCSV(text);
-        if (parsed.length > 0) return parsed;
+        return parseCSV(text);
       }
     }
   } catch (directErr) {
@@ -292,13 +308,12 @@ export async function fetchPublicSheetCSV(
   try {
     const exportUrl = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&sheet=${encodeURIComponent(
       sheetName
-    )}`;
-    const res = await fetch(exportUrl);
+    )}&_t=${cacheBuster}`;
+    const res = await fetch(exportUrl, { cache: 'no-store' });
     if (res.ok) {
       const text = await res.text();
       if (!text.startsWith('<!DOCTYPE') && !text.includes('<html')) {
-        const parsed = parseCSV(text);
-        if (parsed.length > 0) return parsed;
+        return parseCSV(text);
       }
     }
   } catch (exportErr) {
@@ -350,6 +365,7 @@ export async function fetchBooksFromSheet(
 ): Promise<Book[]> {
   let rows: any[][] = [];
   let headerRow: string[] | undefined;
+  let fetchedSuccessfully = false;
 
   // 1. Try authenticated Google Sheets API v4 first if access token is available
   if (accessToken) {
@@ -357,12 +373,14 @@ export async function fetchBooksFromSheet(
       const res = await fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:P2000`,
         {
+          cache: 'no-store',
           headers: { Authorization: `Bearer ${accessToken}` },
         }
       );
       if (res.ok) {
         const data = await res.json();
         const allValues: any[][] = data.values || [];
+        fetchedSuccessfully = true;
         if (allValues.length > 0) {
           headerRow = allValues[0];
           rows = allValues.slice(1);
@@ -374,7 +392,7 @@ export async function fetchBooksFromSheet(
   }
 
   // 2. If no token or API failed, fetch via public Google Sheet CSV endpoint (works for anyone with the link)
-  if (rows.length === 0) {
+  if (!fetchedSuccessfully) {
     try {
       const csvData = await fetchPublicSheetCSV(spreadsheetId, 'Books');
       // Row 0 in CSV is headers ('Code', 'Title', ...), data starts from row 1
@@ -393,30 +411,42 @@ export async function fetchBooksFromSheet(
   const parsedBooks: Book[] = [];
 
   rows.forEach((r, idx) => {
-    const rawCode = (r[col.Code] || `L${idx + 1}`).trim().toUpperCase();
+    const cellCode = String(r[col.Code] || '').trim();
+    const cellTitle = String(r[col.Title] || '').trim();
+    if (!cellCode && !cellTitle) {
+      return; // Skip blank rows left after editing/deleting in Google Sheet
+    }
+    if (cellCode.toLowerCase() === 'code' && cellTitle.toLowerCase() === 'title') {
+      return; // Skip duplicate header rows
+    }
+
+    const rawCode = (cellCode || `L${idx + 1}`).toUpperCase();
     if (seenCodes.has(rawCode)) {
       return; // Code is primary key (ห้ามซ้ำ)
     }
     seenCodes.add(rawCode);
 
+    const rawStatus = String(r[col.Status] || '').trim();
+    const rawSource = String(r[col.Source] || '').trim();
+
     parsedBooks.push({
       id: `sheet-${rawCode}`,
       code: rawCode,
-      title: r[col.Title] || 'Untitled',
-      category: r[col.Category] || 'หนังสือทั่วไป',
+      title: cellTitle || 'Untitled',
+      category: String(r[col.Category] || '').trim() || 'หนังสือทั่วไป',
       price: Number(r[col.Price]) || 0,
-      status: (r[col.Status] as any) || 'Available',
-      source: (r[col.Source] as any) || 'Library',
-      memberType: r[col.MemberType] || undefined,
-      driveFileId: r[col.DriveFileId] || undefined,
-      coverImage: r[col.CoverImage] || undefined,
-      createdAt: r[col.CreatedAt] || new Date().toISOString(),
-      matchedAt: r[col.MatchedAt] || undefined,
-      matchedWithCode: r[col.MatchedWithCode] || undefined,
+      status: (rawStatus as any) || 'Available',
+      source: (rawSource as any) || (rawCode.startsWith('U') ? 'User' : 'Library'),
+      memberType: String(r[col.MemberType] || '').trim() || undefined,
+      driveFileId: String(r[col.DriveFileId] || '').trim() || undefined,
+      coverImage: String(r[col.CoverImage] || '').trim() || undefined,
+      createdAt: String(r[col.CreatedAt] || '').trim() || new Date().toISOString(),
+      matchedAt: String(r[col.MatchedAt] || '').trim() || undefined,
+      matchedWithCode: String(r[col.MatchedWithCode] || '').trim() || undefined,
       exchangeCount: Number(r[col.ExchangeCount]) || 1,
-      transactionId: r[col.TransactionId] || undefined,
-      isbn: r[col.ISBN] || undefined,
-      matchedTransactionId: r[col.MatchedTransactionId] || undefined,
+      transactionId: String(r[col.TransactionId] || '').trim() || undefined,
+      isbn: String(r[col.ISBN] || '').trim() || undefined,
+      matchedTransactionId: String(r[col.MatchedTransactionId] || '').trim() || undefined,
     });
   });
 
@@ -429,6 +459,7 @@ export async function fetchTransactionsFromSheet(
 ): Promise<TransactionRecord[]> {
   let rows: any[][] = [];
   let headerRow: string[] | undefined;
+  let fetchedSuccessfully = false;
 
   // 1. Try authenticated Google Sheets API v4 if access token available
   if (accessToken) {
@@ -436,12 +467,14 @@ export async function fetchTransactionsFromSheet(
       const res = await fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A1:K2000`,
         {
+          cache: 'no-store',
           headers: { Authorization: `Bearer ${accessToken}` },
         }
       );
       if (res.ok) {
         const data = await res.json();
         const allValues: any[][] = data.values || [];
+        fetchedSuccessfully = true;
         if (allValues.length > 0) {
           headerRow = allValues[0];
           rows = allValues.slice(1);
@@ -453,7 +486,7 @@ export async function fetchTransactionsFromSheet(
   }
 
   // 2. Fall back to public link fetch
-  if (rows.length === 0) {
+  if (!fetchedSuccessfully) {
     try {
       const csvData = await fetchPublicSheetCSV(spreadsheetId, 'Transactions');
       if (csvData.length > 0) {
@@ -470,10 +503,10 @@ export async function fetchTransactionsFromSheet(
   const seenTxIds = new Set<string>();
   const parsedRecords: TransactionRecord[] = [];
 
-  rows.forEach((r, idx) => {
-    const rawId = (r[col.TransactionId] || `tx-${idx + 1}`).trim();
-    if (seenTxIds.has(rawId)) {
-      return; // TransactionId is primary key (ห้ามซ้ำ)
+  rows.forEach((r) => {
+    const rawId = String(r[col.TransactionId] || '').trim();
+    if (!rawId || rawId.toLowerCase() === 'transactionid' || seenTxIds.has(rawId)) {
+      return; // Skip blank rows, header rows, or duplicate TransactionId
     }
     seenTxIds.add(rawId);
 
@@ -559,7 +592,7 @@ export async function syncAllBooksToSheet(
     b.source,
     b.memberType || '',
     b.driveFileId || '',
-    b.coverImage || '',
+    getSafeSheetCoverValue(b),
     b.createdAt,
     b.matchedAt || '',
     b.matchedWithCode || '',
@@ -571,7 +604,7 @@ export async function syncAllBooksToSheet(
 
   if (rows.length === 0) return;
 
-  await fetch(
+  const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:P${rows.length + 1}?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
@@ -584,6 +617,11 @@ export async function syncAllBooksToSheet(
       }),
     }
   );
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`ไม่สามารถอัปเดต Google Sheet ได้ (${res.status}): ${errText || res.statusText}`);
+  }
 }
 
 export async function syncAllTransactionsToSheet(

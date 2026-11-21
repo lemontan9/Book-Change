@@ -21,11 +21,14 @@ async function startServer() {
         return res.status(400).json({ error: 'Missing spreadsheet id' });
       }
 
-      // Try gviz/tq CSV export
-      const gvizUrl = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheet)}`;
+      const cacheBuster = Date.now();
+      // Try gviz/tq CSV export (with cache buster so recent edits appear immediately)
+      const gvizUrl = `https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheet)}&_t=${cacheBuster}`;
       let response = await fetch(gvizUrl, {
         redirect: 'follow',
+        cache: 'no-store',
         headers: {
+          'Cache-Control': 'no-cache',
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         },
@@ -35,10 +38,12 @@ async function startServer() {
 
       // If gviz returned html (e.g. login redirect / not shared), try export?format=csv
       if (!response.ok || text.startsWith('<!DOCTYPE') || text.includes('<html')) {
-        const exportUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&sheet=${encodeURIComponent(sheet)}`;
+        const exportUrl = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&sheet=${encodeURIComponent(sheet)}&_t=${cacheBuster}`;
         const exportRes = await fetch(exportUrl, {
           redirect: 'follow',
+          cache: 'no-store',
           headers: {
+            'Cache-Control': 'no-cache',
             'User-Agent':
               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           },
@@ -60,6 +65,9 @@ async function startServer() {
       }
 
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.setHeader('Access-Control-Allow-Origin', '*');
       return res.status(200).send(text);
     } catch (err: any) {

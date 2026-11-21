@@ -99,27 +99,28 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-xs font-sans">
-      <div className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-md overflow-hidden shadow-xl flex flex-col border border-[#E8ECF2] animate-in slide-in-from-bottom-5">
-        <div className="w-10 h-1 bg-[#E8ECF2] rounded-full mx-auto my-2 sm:hidden" />
-        <div className="flex items-center justify-between px-4 py-3 border-b border-[#E8ECF2]">
+      <div className="bg-[#FFFCF7] rounded-t-[28px] sm:rounded-[28px] w-full max-w-md overflow-hidden shadow-2xl flex flex-col border border-[#EAE0D2]">
+        <div className="w-10 h-1 bg-[#E5D8C8] rounded-full mx-auto my-2 sm:hidden" />
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#EFE6D8]">
           <div className="flex items-center gap-2">
-            <Camera className="w-4 h-4 text-[#4CAF4F]" />
-            <h3 className="font-medium text-xs sm:text-sm text-[#263238]">
+            <Camera className="w-4 h-4 text-[#4B5E26]" />
+            <h3 className="font-bold text-xs sm:text-sm text-[#4E342E]">
               ถ่ายภาพหน้าปก {bookCode ? `(${bookCode})` : ''}
             </h3>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1 text-[#717171] hover:text-[#263238] rounded-lg"
+            className="w-7 h-7 rounded-full bg-white border border-[#E5D8C8] flex items-center justify-center text-[#7E7369] hover:text-[#3E2723] cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="relative bg-[#263238] aspect-[4/3] flex items-center justify-center overflow-hidden">
+        <div className="relative bg-[#2C241E] aspect-[4/3] flex items-center justify-center overflow-hidden">
           {errorMsg ? (
             <div className="p-4 text-center text-white max-w-xs font-normal">
-              <AlertCircle className="w-8 h-8 text-[#E8F5E9] mx-auto mb-2 opacity-80" />
+              <AlertCircle className="w-8 h-8 text-[#DCE7C4] mx-auto mb-2 opacity-80" />
               <p className="text-xs">{errorMsg}</p>
             </div>
           ) : capturedImage ? (
@@ -133,8 +134,8 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
                 muted
                 className="w-full h-full object-cover"
               />
-              <div className="absolute inset-6 border-2 border-dashed border-white/60 rounded-xl pointer-events-none flex items-center justify-center">
-                <span className="text-[10px] text-white bg-black/40 px-2.5 py-1 rounded-full backdrop-blur-xs font-normal">
+              <div className="absolute inset-6 border-2 border-dashed border-white/60 rounded-2xl pointer-events-none flex items-center justify-center">
+                <span className="text-[10px] text-white bg-black/45 px-3 py-1 rounded-full backdrop-blur-xs font-normal">
                   จัดหน้าปกให้อยู่ในกรอบ
                 </span>
               </div>
@@ -143,8 +144,9 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
 
           {!capturedImage && !errorMsg && (
             <button
+              type="button"
               onClick={toggleFacingMode}
-              className="absolute top-2.5 right-2.5 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 backdrop-blur-xs"
+              className="absolute top-3 right-3 p-2 rounded-full bg-black/50 text-white hover:bg-black/70 backdrop-blur-xs cursor-pointer"
               title="สลับกล้อง"
             >
               <RefreshCw className="w-4 h-4" />
@@ -152,19 +154,21 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
           )}
         </div>
 
-        <div className="p-3 bg-[#F5F7FA] flex items-center justify-between gap-2 border-t border-[#E8ECF2]">
+        <div className="p-3.5 bg-[#F8F2E7] flex items-center justify-between gap-2 border-t border-[#EAE0D2]">
           {capturedImage ? (
             <>
               <button
+                type="button"
                 onClick={handleRetake}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-[#4D4D4D] bg-white border border-[#E8ECF2] rounded-xl hover:bg-[#F5F7FA] tracking-tight"
+                className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-[#5C3A21] bg-white border border-[#E5D8C8] rounded-full hover:bg-[#FAF3E6] cursor-pointer"
               >
-                <RefreshCw className="w-3.5 h-3.5 text-[#717171]" />
+                <RefreshCw className="w-3.5 h-3.5 text-[#7E7369]" />
                 ถ่ายใหม่
               </button>
               <button
+                type="button"
                 onClick={handleConfirm}
-                className="flex items-center gap-1 px-5 py-1.5 text-xs font-medium text-white bg-[#2a3b4c] hover:bg-[#1e2b38] rounded-xl shadow-xs cursor-pointer transition-colors tracking-tight"
+                className="flex items-center gap-1.5 px-5 py-2 text-xs font-semibold text-white bg-[#4B5E26] hover:bg-[#3B4B1D] rounded-full shadow-xs cursor-pointer transition-colors"
               >
                 <Check className="w-3.5 h-3.5" />
                 ใช้รูปนี้
@@ -173,15 +177,17 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
           ) : (
             <>
               <button
+                type="button"
                 onClick={onClose}
-                className="px-3 py-1.5 text-xs text-[#717171] font-normal cursor-pointer tracking-tight"
+                className="px-4 py-2 text-xs text-[#6D5C50] hover:text-[#3E2723] font-medium cursor-pointer"
               >
                 ยกเลิก
               </button>
               <button
+                type="button"
                 disabled={Boolean(errorMsg)}
                 onClick={handleTakeSnapshot}
-                className="flex items-center gap-1.5 px-5 py-1.5 text-xs font-medium text-white bg-[#2a3b4c] hover:bg-[#1e2b38] rounded-xl shadow-xs disabled:opacity-40 cursor-pointer transition-colors tracking-tight"
+                className="flex items-center gap-1.5 px-5 py-2 text-xs font-semibold text-white bg-[#7D502E] hover:bg-[#653F22] rounded-full shadow-xs disabled:opacity-40 cursor-pointer transition-colors"
               >
                 <Camera className="w-4 h-4" />
                 ถ่ายภาพ
