@@ -17,6 +17,7 @@ import type { Book, SystemSettings, TransactionRecord } from '../types';
 import {
   fetchBooksFromSheet,
   fetchTransactionsFromSheet,
+  fetchSettingsFromSheet,
   syncAllBooksToSheet,
   syncAllTransactionsToSheet,
 } from '../services/googleSheets';
@@ -31,7 +32,11 @@ interface AdminDashboardProps {
   onConnectGoogle?: () => void;
   onSelectTab?: (tab: 'kiosk' | 'dashboard' | 'books' | 'settings') => void;
   onOpenAddBook?: () => void;
-  onSheetDataSynced?: (books: Book[], transactions: TransactionRecord[]) => void;
+  onSheetDataSynced?: (
+    books: Book[],
+    transactions: TransactionRecord[],
+    settingsPatch?: Partial<SystemSettings> | null
+  ) => void;
 }
 
 const parseTransactionDate = (raw?: string): Date | null => {
@@ -119,10 +124,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     try {
       const token = await getAccessToken().catch(() => null);
 
-      // Fetch Books and Transactions sheets concurrently (authoritative source of truth)
-      const [fetchedBooks, fetchedTransactions] = await Promise.all([
+      // Fetch Books, Transactions, and Settings sheets concurrently (authoritative source of truth)
+      const [fetchedBooks, fetchedTransactions, fetchedSettings] = await Promise.all([
         fetchBooksFromSheet(token, spreadsheetId),
         fetchTransactionsFromSheet(token, spreadsheetId),
+        fetchSettingsFromSheet(token, spreadsheetId).catch(() => null),
       ]);
 
       const sortedBooks = StorageService.sortBooks(fetchedBooks);
@@ -131,7 +137,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setSheetTransactions(fetchedTransactions);
       setUnsyncedBooksList([]);
       setUnsyncedTxList([]);
-      onSheetDataSyncedRef.current?.(sortedBooks, fetchedTransactions);
+      onSheetDataSyncedRef.current?.(sortedBooks, fetchedTransactions, fetchedSettings);
 
       setIsUsingFallback(false);
       setLastFetchedAt(

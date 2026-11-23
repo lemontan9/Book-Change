@@ -28,6 +28,7 @@ import {
   createBookSwapSpreadsheet,
   syncAllBooksToSheet,
   syncAllTransactionsToSheet,
+  syncSettingsToSheet,
 } from '../services/googleSheets';
 import { getOrCreateBookCoversFolder } from '../services/googleDrive';
 import { getAccessToken } from '../services/firebaseAuth';
@@ -325,7 +326,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
       if (!token) {
         setSyncStatusMsg({
           type: 'info',
-          text: 'บันทึกการตั้งค่าเรียบร้อยแล้ว (เชื่อมต่อ Google ด้านล่างเพื่อซิงค์ข้อมูลไปยัง Google Sheet อัตโนมัติ)',
+          text: 'บันทึกในเบราว์เซอร์นี้แล้ว — หากต้องการให้การตั้งค่านี้ซิงค์ไปเครื่องอื่น / Vercel กรุณาลงชื่อเข้าใช้ด้วย Google Mail แล้วกดบันทึกอีกครั้ง',
         });
         setTimeout(() => setIsSaved(false), 3000);
         return;
@@ -341,6 +342,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
       }
 
       if (targetId) {
+        await syncSettingsToSheet(token, targetId, updated);
         await syncAllBooksToSheet(token, targetId, books);
         const allTx = StorageService.getTransactions();
         await syncAllTransactionsToSheet(token, targetId, allTx);
@@ -355,7 +357,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
 
         setSyncStatusMsg({
           type: 'success',
-          text: `บันทึกข้อมูลและซิงค์หนังสือ (${books.length} เล่ม) พร้อมประวัติการแลกเปลี่ยน (${allTx.length} รายการ) สำเร็จ!`,
+          text: `บันทึกและซิงค์การตั้งค่าระบบ (เงื่อนไข/หมวดหมู่), หนังสือ (${books.length} เล่ม) และธุรกรรม (${allTx.length} รายการ) ขึ้น Google Sheet สำเร็จ!`,
         });
       }
     } catch (err: any) {
@@ -406,11 +408,14 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
         categories,
         exchangeTerms,
         showWelcomeShelf,
+        participationHistoryOptions: participationOptions,
+        visitFrequencyOptions: frequencyOptions,
         deadStockThresholdDays: Number(deadStockDays) || 30,
         connectedSpreadsheetId: newSheetId,
         connectedDriveFolderId: folderId,
         lastSyncTime: new Date().toISOString(),
       };
+      await syncSettingsToSheet(token, newSheetId, updated);
       StorageService.saveSettings(updated);
       onUpdateSettings(updated);
 
@@ -483,6 +488,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
         currentConfig.connectedDriveFolderId = folderId;
       }
 
+      await syncSettingsToSheet(token, targetId, currentConfig);
       await syncAllBooksToSheet(token, targetId, books);
       const allTx = StorageService.getTransactions();
       await syncAllTransactionsToSheet(token, targetId, allTx);
@@ -502,7 +508,7 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
 
       setSyncStatusMsg({
         type: 'success',
-        text: `ซิงค์ข้อมูลทั้งหมด (${books.length} เล่ม, ${allTx.length} ธุรกรรม) ไปยัง Google Sheets สำเร็จตามโครงสร้าง PDPA ล่าสุด!`,
+        text: `ซิงค์การตั้งค่าระบบ และข้อมูลทั้งหมด (${books.length} เล่ม, ${allTx.length} ธุรกรรม) ไปยัง Google Sheets สำเร็จ!`,
       });
     } catch (err: any) {
       console.error(err);

@@ -707,3 +707,228 @@ export async function syncAllTransactionsToSheet(
     }
   );
 }
+
+export const SETTINGS_HEADERS = ['Key', 'Value', 'UpdatedAt'];
+
+function parseStringListSetting(raw: string): string[] | null {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed.map((v) => String(v ?? '').trim()).filter(Boolean);
+        return cleaned.length > 0 ? cleaned : null;
+      }
+    } catch {
+      // Fallback to newline split
+    }
+  }
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.length > 0 ? lines : null;
+}
+
+/**
+ * Fetches system settings from the "Settings" tab in Google Sheet.
+ * Returns null if the Settings tab is empty or has no recognized keys.
+ */
+export async function fetchSettingsFromSheet(
+  accessToken: string | null | undefined,
+  spreadsheetId: string
+): Promise<Partial<SystemSettings> | null> {
+  let rows: any[][] = [];
+
+  if (accessToken) {
+    try {
+      const res = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+          spreadsheetId
+        )}/values/Settings!A1:C100`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        rows = data.values || [];
+      }
+    } catch (e) {
+      console.warn('Authenticated Settings sheet fetch failed, trying public CSV:', e);
+    }
+  }
+
+  if (rows.length === 0) {
+    try {
+      rows = await fetchPublicSheetCSV(spreadsheetId, 'Settings');
+    } catch (e) {
+      console.warn('Public Settings sheet fetch failed (non-fatal):', e);
+      return null;
+    }
+  }
+
+  if (!rows || rows.length === 0) return null;
+
+  const firstCell = String(rows[0]?.[0] || '').trim().toLowerCase();
+  const dataRows = firstCell === 'key' || firstCell === 'setting' ? rows.slice(1) : rows;
+  if (dataRows.length === 0) return null;
+
+  const patch: Partial<SystemSettings> = {};
+  let hasAnyKey = false;
+
+  dataRows.forEach((row) => {
+    const key = String(row?.[0] || '').trim();
+    const rawVal = row?.[1] !== undefined && row?.[1] !== null ? String(row[1]) : '';
+    if (!key) return;
+
+    switch (key) {
+      case 'categories': {
+        const list = parseStringListSetting(rawVal);
+        if (list) {
+          patch.categories = list;
+          hasAnyKey = true;
+        }
+        break;
+      }
+      case 'exchangeTerms': {
+        if (rawVal.trim().length > 0) {
+          patch.exchangeTerms = rawVal;
+          hasAnyKey = true;
+        }
+        break;
+      }
+      case 'memberTypes': {
+        const list = parseStringListSetting(rawVal);
+        if (list) {
+          patch.memberTypes = list;
+          hasAnyKey = true;
+        }
+        break;
+      }
+      case 'participationHistoryOptions': {
+        const list = parseStringListSetting(rawVal);
+        if (list) {
+          patch.participationHistoryOptions = list;
+          hasAnyKey = true;
+        }
+        break;
+      }
+      case 'visitFrequencyOptions': {
+        const list = parseStringListSetting(rawVal);
+        if (list) {
+          patch.visitFrequencyOptions = list;
+          hasAnyKey = true;
+        }
+        break;
+      }
+      case 'showWelcomeShelf': {
+        const lower = rawVal.trim().toLowerCase();
+        if (lower === 'true' || lower === 'false') {
+          patch.showWelcomeShelf = lower === 'true';
+          hasAnyKey = true;
+        }
+        break;
+      }
+      case 'deadStockThresholdDays': {
+        const num = Number(rawVal.trim());
+        if (Number.isFinite(num) && num > 0) {
+          patch.deadStockThresholdDays = Math.round(num);
+          hasAnyKey = true;
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  });
+
+  return hasAnyKey ? patch : null;
+}
+
+/**
+ * Syncs system settings to the "Settings" tab in Google Sheet so all devices and Vercel deployments share identical settings.
+ */
+export async function syncSettingsToSheet(
+  accessToken: string,
+  spreadsheetId: string,
+  settings: SystemSettings
+): Promise<void> {
+  const now = new Date().toISOString();
+
+  // Write headers (A1:C1)
+  const headerRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+      spreadsheetId
+    )}/values/Settings!A1:C1?valueInputOption=RAW`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        values: [SETTINGS_HEADERS],
+      }),
+    }
+  );
+
+  if (!headerRes.ok) {
+    const errText = await headerRes.text().catch(() => '');
+    throw new Error(
+      `ไม่สามารถบันทึกการตั้งค่าลงแท็บ Settings ได้ (${headerRes.status}): ${errText || headerRes.statusText}`
+    );
+  }
+
+  // Clear existing setting rows
+  try {
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+        spreadsheetId
+      )}/values/Settings!A2:C100:clear`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  } catch (e) {
+    console.warn('Clear settings sheet range non-fatal:', e);
+  }
+
+  const rows: string[][] = [
+    ['exchangeTerms', settings.exchangeTerms || '', now],
+    ['categories', JSON.stringify(settings.categories || []), now],
+    ['memberTypes', JSON.stringify(settings.memberTypes || []), now],
+    ['participationHistoryOptions', JSON.stringify(settings.participationHistoryOptions || []), now],
+    ['visitFrequencyOptions', JSON.stringify(settings.visitFrequencyOptions || []), now],
+    ['showWelcomeShelf', String(Boolean(settings.showWelcomeShelf)), now],
+    ['deadStockThresholdDays', String(Number(settings.deadStockThresholdDays) || 30), now],
+  ];
+
+  const writeRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+      spreadsheetId
+    )}/values/Settings!A2:C${rows.length + 1}?valueInputOption=RAW`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        values: rows,
+      }),
+    }
+  );
+
+  if (!writeRes.ok) {
+    const errText = await writeRes.text().catch(() => '');
+    throw new Error(
+      `ไม่สามารถซิงค์การตั้งค่าลง Google Sheet ได้ (${writeRes.status}): ${errText || writeRes.statusText}`
+    );
+  }
+}

@@ -10,6 +10,7 @@ import {
   createBookSwapSpreadsheet,
   fetchBooksFromSheet,
   fetchTransactionsFromSheet,
+  fetchSettingsFromSheet,
 } from './services/googleSheets';
 import { getOrCreateBookCoversFolder, uploadCoverImageToDrive } from './services/googleDrive';
 import { Navbar } from './components/Navbar';
@@ -57,9 +58,10 @@ export default function App() {
           ? tokenOverride
           : googleToken || (await getAccessToken().catch(() => null));
 
-      const [fetchedBooks, fetchedTx] = await Promise.all([
+      const [fetchedBooks, fetchedTx, fetchedSettings] = await Promise.all([
         fetchBooksFromSheet(token, targetId),
         fetchTransactionsFromSheet(token, targetId).catch(() => []),
+        fetchSettingsFromSheet(token, targetId).catch(() => null),
       ]);
 
       const sortedBooks = StorageService.sortBooks(fetchedBooks);
@@ -72,6 +74,7 @@ export default function App() {
 
       const updatedSettings: SystemSettings = {
         ...StorageService.getSettings(),
+        ...(fetchedSettings || {}),
         lastSyncTime: new Date().toISOString(),
       };
       StorageService.saveSettings(updatedSettings);
@@ -355,12 +358,21 @@ export default function App() {
             onConnectGoogle={() => setIsLoginModalOpen(true)}
             onSelectTab={handleSelectTab}
             onOpenAddBook={() => setCurrentTab('books')}
-            onSheetDataSynced={(freshBooks, freshTx) => {
+            onSheetDataSynced={(freshBooks, freshTx, freshSettingsPatch) => {
               const sorted = StorageService.sortBooks(freshBooks);
               StorageService.saveBooks(sorted);
               StorageService.saveTransactions(freshTx);
               setBooks(sorted);
               setTransactions(freshTx);
+              if (freshSettingsPatch) {
+                const mergedSettings: SystemSettings = {
+                  ...StorageService.getSettings(),
+                  ...freshSettingsPatch,
+                  lastSyncTime: new Date().toISOString(),
+                };
+                StorageService.saveSettings(mergedSettings);
+                setSettings(mergedSettings);
+              }
             }}
           />
         )}
