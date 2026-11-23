@@ -95,7 +95,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           {isAdminLoggedIn ? (
             <div className="flex items-center gap-1.5 bg-[#F3E7D3] px-3.5 py-1.5 rounded-full text-xs font-semibold text-[#5C3A21] border border-[#E0CEB5] shadow-2xs">
               <ShieldCheck className="w-3.5 h-3.5 text-[#5C3A21] shrink-0" />
-              <span className="max-w-[90px] sm:max-w-[140px] truncate">{adminUsername || 'Admin'}</span>
+              <span>Staff</span>
               <button
                 type="button"
                 onClick={onAdminLogout}

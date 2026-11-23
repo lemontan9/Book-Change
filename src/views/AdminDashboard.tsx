@@ -7,6 +7,7 @@ import {
   Repeat,
   Layers,
   Gift,
+  PiggyBank,
   CalendarDays,
   UploadCloud,
   AlertTriangle,
@@ -238,10 +239,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Distinct count of transaction ID (Count Distinct)
   const totalParticipants = distinctTransactionMap.size || sheetTransactions.length;
   const totalBooksCount = sheetBooks.length;
-  const availableBooksCount = sheetBooks.filter((b) => b.status === 'Available').length;
+  const availableBooks = sheetBooks.filter((b) => b.status === 'Available');
+  const availableBooksCount = availableBooks.length;
+  const totalBooksValue = sheetBooks.reduce((sum, b) => sum + (Number(b.price) || 0), 0);
+  const availableBooksValue = availableBooks.reduce((sum, b) => sum + (Number(b.price) || 0), 0);
 
   const matchedBooks = sheetBooks.filter((b) => b.status === 'Matched');
   const totalMatchedCount = matchedBooks.length;
+  const matchedBooksValue = matchedBooks.reduce((sum, b) => sum + (Number(b.price) || 0), 0);
+  const avgMatchedBookValue =
+    totalMatchedCount > 0 ? Math.round(matchedBooksValue / totalMatchedCount) : 0;
 
   const matchedLCount = matchedBooks.filter((b) => {
     const code = (b.code || '').trim().toUpperCase();
@@ -576,35 +583,100 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
   }, [sheetTransactions]);
 
-  // 4. Exchange Frequency Counts strictly from Google Sheet books exchangeCount
+  // 4 & 5. Real Exchange Chains traced via matchedWithCode (e.g., L1: THE PHILOSOPHY BOOK > U14: กระถิ่น กลิ่นหอม = ส่งต่อ 1 ครั้ง)
+  const exchangeChains = useMemo(() => {
+    const bookByCode = new Map<string, Book>();
+    sheetBooks.forEach((b) => {
+      const code = (b.code || '').trim().toUpperCase();
+      if (code) bookByCode.set(code, b);
+    });
+
+    const nextMap = new Map<string, string>();
+    const incomingTargets = new Set<string>();
+
+    sheetBooks.forEach((b) => {
+      const fromCode = (b.code || '').trim().toUpperCase();
+      const toCode = (b.matchedWithCode || '').trim().toUpperCase();
+      if (fromCode && toCode && toCode !== 'DONATION' && fromCode !== toCode) {
+        nextMap.set(fromCode, toCode);
+        incomingTargets.add(toCode);
+      }
+    });
+
+    const startCodes = Array.from(nextMap.keys()).filter((c) => !incomingTargets.has(c));
+    const visitedStarts = new Set<string>();
+    const chains: {
+      nodes: { code: string; title: string }[];
+      flowLabel: string;
+      codeTrail: string;
+      hops: number;
+      latestMatchedAt: number;
+    }[] = [];
+
+    const traceFrom = (startCode: string) => {
+      if (visitedStarts.has(startCode)) return;
+      const visited = new Set<string>();
+      const nodes: { code: string; title: string }[] = [];
+      let latestMatchedAt = 0;
+      let curr: string | undefined = startCode;
+
+      while (curr && !visited.has(curr)) {
+        visited.add(curr);
+        visitedStarts.add(curr);
+        const book = bookByCode.get(curr);
+        nodes.push({
+          code: curr,
+          title: book?.title || curr,
+        });
+        if (book?.matchedAt) {
+          const ts = new Date(book.matchedAt).getTime();
+          if (!Number.isNaN(ts)) latestMatchedAt = Math.max(latestMatchedAt, ts);
+        }
+        curr = nextMap.get(curr);
+      }
+
+      if (nodes.length >= 2) {
+        chains.push({
+          nodes,
+          flowLabel: nodes.map((n) => n.title).join(' > '),
+          codeTrail: nodes.map((n) => n.code).join(' → '),
+          hops: nodes.length - 1,
+          latestMatchedAt,
+        });
+      }
+    };
+
+    startCodes.forEach(traceFrom);
+    // Cover any cycles not reached from a non-incoming root
+    Array.from(nextMap.keys()).forEach((c) => {
+      if (!visitedStarts.has(c)) traceFrom(c);
+    });
+
+    return chains.sort((a, b) => b.hops - a.hops || b.latestMatchedAt - a.latestMatchedAt);
+  }, [sheetBooks]);
+
   const chainFrequency = useMemo(() => {
-    const c2 = sheetBooks.filter((b) => b.exchangeCount === 2).length;
-    const c3 = sheetBooks.filter((b) => b.exchangeCount === 3).length;
-    const c4 = sheetBooks.filter((b) => b.exchangeCount === 4).length;
-    const c5plus = sheetBooks.filter((b) => (b.exchangeCount || 1) >= 5).length;
+    const c1 = exchangeChains.filter((ch) => ch.hops === 1).length;
+    const c2 = exchangeChains.filter((ch) => ch.hops === 2).length;
+    const c3 = exchangeChains.filter((ch) => ch.hops === 3).length;
+    const c4plus = exchangeChains.filter((ch) => ch.hops >= 4).length;
 
     return [
+      { label: '1 ครั้ง', count: c1 },
       { label: '2 ครั้ง', count: c2 },
       { label: '3 ครั้ง', count: c3 },
-      { label: '4 ครั้ง', count: c4 },
-      { label: '5 ครั้งขึ้นไป', count: c5plus },
+      { label: '4 ครั้งขึ้นไป', count: c4plus },
     ];
-  }, [sheetBooks]);
+  }, [exchangeChains]);
 
-  // 5. Longest Chain: Books with highest exchangeCount in Google Sheet
   const longestChainList = useMemo(() => {
-    const circulated = sheetBooks
-      .filter((b) => (b.exchangeCount || 1) >= 2)
-      .sort((a, b) => (b.exchangeCount || 1) - (a.exchangeCount || 1))
-      .slice(0, 5);
-
-    return circulated.map((b, idx) => ({
+    return exchangeChains.slice(0, 5).map((ch, idx) => ({
       step: idx + 1,
-      title: b.title,
-      code: b.code,
-      count: b.exchangeCount || 1,
+      flowLabel: ch.flowLabel,
+      codeTrail: ch.codeTrail,
+      hops: ch.hops,
     }));
-  }, [sheetBooks]);
+  }, [exchangeChains]);
 
   return (
     <div className="pb-24 pt-5 max-w-6xl mx-auto px-4 min-h-[calc(100vh-8rem)] font-sans space-y-4">
@@ -614,9 +686,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <h1 className="text-lg sm:text-xl font-bold text-[#4E342E] tracking-tight">
             ระบบแลกเปลี่ยนหนังสือ สำนักหอสมุด
           </h1>
-          <p className="text-xs text-[#7E7369] font-medium mt-1">
-            ส่วนการจัดการสำหรับเจ้าหน้าที่ (Admin Dashboard)
-          </p>
         </div>
         {lastFetchedAt && (
           <span className="text-[11px] text-[#4B5E26] bg-[#E9EBC8] border border-[#D4DAA8] px-3 py-1 rounded-full font-medium tabular-nums">
@@ -749,14 +818,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       )}
 
-      {/* 4. Five Metric Banner Cards (Unified with First-Page Pastel Eco Theme) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      {/* 4. Row 1: Four Overview Metric Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Warm Wheat Card: ผู้เข้าร่วมกิจกรรมทั้งหมด */}
-        <div
-          style={{ minHeight: '94px' }}
-          className="bg-[#EFE2CA] border border-[#DFCEB2] rounded-[24px] p-4 shadow-xs flex flex-col justify-between"
-        >
-          <div className="flex items-center justify-between">
+        <div className="min-h-[104px] bg-[#EFE2CA] border border-[#DFCEB2] rounded-[24px] p-4 shadow-xs flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-xs sm:text-sm font-semibold text-[#5C3A21]">
               ผู้เข้าร่วมกิจกรรมทั้งหมด
             </span>
@@ -767,20 +833,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {totalParticipants.toLocaleString()}
               <span className="text-xs font-normal text-[#6D5C50] ml-1.5">คน</span>
             </div>
-            <div className="text-[11px] text-[#6D5C50] font-medium mt-0.5">
-              นำหนังสือมา {booksPerTransactionStats.totalBrought} เล่ม
-              <br />
-              (เฉลี่ย {booksPerTransactionStats.avgPerTx} เล่ม/ครั้ง)
+            <div className="text-[11px] text-[#6D5C50] font-medium mt-0.5 whitespace-nowrap truncate">
+              นำหนังสือมา {booksPerTransactionStats.totalBrought} เล่ม (เฉลี่ย {booksPerTransactionStats.avgPerTx} เล่ม/ครั้ง)
             </div>
           </div>
         </div>
 
         {/* Soft Parchment Card: หนังสือทั้งหมดในระบบ */}
-        <div
-          style={{ minHeight: '94px' }}
-          className="bg-[#F4EDE0] border border-[#E5D8C8] rounded-[24px] p-4 shadow-xs flex flex-col justify-between"
-        >
-          <div className="flex items-center justify-between">
+        <div className="min-h-[104px] bg-[#F4EDE0] border border-[#E5D8C8] rounded-[24px] p-4 shadow-xs flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-xs sm:text-sm font-semibold text-[#5C3A21]">
               หนังสือทั้งหมดในระบบ
             </span>
@@ -791,40 +852,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {totalBooksCount.toLocaleString()}
               <span className="text-xs font-normal text-[#6D5C50] ml-1.5">เล่ม</span>
             </div>
-            <div className="text-[11px] text-[#7E7369] font-medium mt-0.5">
-              รวมหนังสือทั้งหมดที่บันทึกไว้
-            </div>
-          </div>
-        </div>
-
-        {/* Soft Warm Clay Card: หนังสือที่ถูกแลกออกแล้ว */}
-        <div
-          style={{ minHeight: '94px' }}
-          className="bg-[#F4E6DA] border border-[#E2CBB7] rounded-[24px] p-4 shadow-xs flex flex-col justify-between"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs sm:text-sm font-semibold text-[#5C3A21]">
-              หนังสือที่ถูกแลกออกแล้ว
-            </span>
-            <Repeat className="w-4 h-4 text-[#8B5530]/80 shrink-0" />
-          </div>
-          <div>
-            <div className="text-2xl sm:text-3xl font-bold text-[#4E342E] tracking-tight tabular-nums">
-              {totalMatchedCount.toLocaleString()}
-              <span className="text-xs font-normal text-[#6D5C50] ml-1.5">เล่ม</span>
-            </div>
-            <div className="text-[11px] text-[#7E614E] font-medium mt-0.5">
-              ส่วนกลาง (L) {matchedLCount.toLocaleString()} · ผู้เข้าร่วม (U) {matchedUCount.toLocaleString()}
+            <div className="text-[11px] text-[#7E7369] font-medium mt-0.5 tabular-nums">
+              มูลค่ารวม ฿{totalBooksValue.toLocaleString()}
             </div>
           </div>
         </div>
 
         {/* Soft Eco Sage Card: หนังสือพร้อมแลก */}
-        <div
-          style={{ minHeight: '94px' }}
-          className="bg-[#DCE7C4] border border-[#CBD6A6] rounded-[24px] p-4 shadow-xs flex flex-col justify-between"
-        >
-          <div className="flex items-center justify-between">
+        <div className="min-h-[104px] bg-[#DCE7C4] border border-[#CBD6A6] rounded-[24px] p-4 shadow-xs flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-xs sm:text-sm font-semibold text-[#3B4C1D]">
               หนังสือพร้อมแลก
             </span>
@@ -835,18 +871,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {availableBooksCount.toLocaleString()}
               <span className="text-xs font-normal text-[#4B5E26] ml-1.5">เล่ม</span>
             </div>
-            <div className="text-[11px] text-[#4B5E26]/90 font-medium mt-0.5">
-              พร้อมแลกเปลี่ยนบนชั้นหนังสือ
+            <div className="text-[11px] text-[#4B5E26]/90 font-medium mt-0.5 tabular-nums">
+              มูลค่าพร้อมแลก ฿{availableBooksValue.toLocaleString()}
             </div>
           </div>
         </div>
 
         {/* Soft Warm Amber Card: หนังสือที่ได้รับบริจาค */}
-        <div
-          style={{ minHeight: '94px' }}
-          className="bg-[#FBF0D9] border border-[#E7CFA2] rounded-[24px] p-4 shadow-xs flex flex-col justify-between"
-        >
-          <div className="flex items-center justify-between">
+        <div className="min-h-[104px] bg-[#FBF0D9] border border-[#E7CFA2] rounded-[24px] p-4 shadow-xs flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-xs sm:text-sm font-semibold text-[#7A4B14]">
               หนังสือที่ได้รับบริจาค
             </span>
@@ -858,32 +891,115 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <span className="text-xs font-normal text-[#8B5A1F] ml-1.5">เล่ม</span>
             </div>
             <div className="text-[11px] text-[#8B5A1F] font-medium mt-0.5">
-              {donatedBooksStats.donatedTxCount > 0
-                ? `จากผู้ร่วมบริจาค ${donatedBooksStats.donatedTxCount.toLocaleString()} ครั้ง`
-                : 'นับจากรายการบริจาคในระบบ'}
+              เฉพาะที่มีผู้บริจาคในระบบ
             </div>
           </div>
         </div>
       </div>
 
-      {/* 5. Middle Section (2 Columns: Left Chart, Right 2 Cards) */}
+      {/* 4.5 Row 2: Exchange Highlights (Left 7 cols) + Exchange Breakdown (Right 5 cols) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+        {/* Left 7 cols: หนังสือที่ถูกแลกออกแล้ว + มูลค่าหนังสือที่ประหยัดได้ */}
+        <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-12 gap-4 items-stretch">
+          {/* Soft Warm Clay Card: หนังสือที่ถูกแลกออกแล้ว */}
+          <div className="sm:col-span-5 bg-[#F4E6DA] border border-[#E2CBB7] rounded-[24px] p-5 shadow-xs flex flex-col justify-between min-h-[140px]">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs sm:text-sm font-semibold text-[#5C3A21]">
+                หนังสือที่ถูกแลกออกแล้ว
+              </span>
+              <Repeat className="w-4 h-4 text-[#8B5530]/80 shrink-0" />
+            </div>
+            <div className="mt-3">
+              <div className="text-3xl sm:text-4xl font-bold text-[#4E342E] tracking-tight tabular-nums">
+                {totalMatchedCount.toLocaleString()}
+                <span className="text-xs sm:text-sm font-normal text-[#6D5C50] ml-1.5">เล่ม</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Highlight Eco Savings Card: มูลค่าหนังสือที่ประหยัดได้ */}
+          <div className="sm:col-span-7 bg-gradient-to-br from-[#4B5E26] to-[#3B4C1D] border border-[#3B4C1D] rounded-[24px] p-5 shadow-sm flex flex-col justify-between text-white relative overflow-hidden min-h-[140px]">
+            <div className="flex items-center justify-between gap-2 relative z-10">
+              <span className="text-xs sm:text-sm font-semibold text-[#F4F8EA]">
+                มูลค่าหนังสือที่ประหยัดได้
+              </span>
+              <span className="w-8 h-8 rounded-full bg-white/15 flex items-center justify-center shrink-0">
+                <PiggyBank className="w-4 h-4 text-[#FBE8A6]" />
+              </span>
+            </div>
+
+            <div className="relative z-10 space-y-2 mt-3">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-3xl sm:text-4xl font-bold text-white tracking-tight tabular-nums">
+                  {matchedBooksValue.toLocaleString()}
+                </span>
+                <span className="text-xs sm:text-sm font-medium text-[#DCE7C4]">บาท</span>
+              </div>
+
+              <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                <span className="inline-flex items-center bg-white/15 text-[#F6FAEE] px-2.5 py-0.5 rounded-full font-medium tabular-nums">
+                  แลกออก {totalMatchedCount.toLocaleString()} เล่ม
+                </span>
+                {avgMatchedBookValue > 0 && (
+                  <span className="inline-flex items-center bg-[#FBE8A6]/20 text-[#FCECB8] px-2.5 py-0.5 rounded-full font-medium tabular-nums">
+                    เฉลี่ย {avgMatchedBookValue.toLocaleString()} บ./เล่ม
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right 5 cols: สถิติการแลกออก */}
+        <div className="lg:col-span-5 bg-[#FFFCF7]/95 backdrop-blur-xs border border-[#EAE0D2] rounded-[28px] p-5 shadow-xs flex flex-col justify-between gap-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h3 className="text-[#4E342E] font-bold text-[21px]">
+                สถิติการแลกออก
+              </h3>
+            </div>
+            <span className="text-[11px] text-[#5C3A21] font-semibold font-mono bg-[#F3E7D3] border border-[#E0CEB5] px-2.5 py-0.5 rounded-full tabular-nums shrink-0">
+              รวม {totalMatchedCount.toLocaleString()} เล่ม
+            </span>
+          </div>
+
+          <div className="space-y-2.5">
+            <div className="h-[35px] bg-[#F8F2E7] border border-[#EAE0D2] rounded-2xl px-4 py-3 flex items-center justify-between">
+              <span className="text-xs text-[#4E342E] font-medium">
+                หนังสือส่วนกลาง (L)
+              </span>
+              <span className="text-xs sm:text-sm font-bold text-[#5C3A21] font-mono tabular-nums">
+                {matchedLCount.toLocaleString()} เล่ม
+              </span>
+            </div>
+
+            <div className="h-[35px] bg-[#F8F2E7] border border-[#EAE0D2] rounded-2xl px-4 py-3 flex items-center justify-between">
+              <span className="text-xs text-[#4E342E] font-medium">
+                หนังสือจากผู้เข้าร่วม (U)
+              </span>
+              <span className="text-xs sm:text-sm font-bold text-[#4B5E26] font-mono tabular-nums">
+                {matchedUCount.toLocaleString()} เล่ม
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 5. Row 3: Charts Section (Left 7 cols: หมวดหมู่หนังสือที่คงเหลือ, Right 5 cols: ประเภทสมาชิก) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
         {/* Left Column: หมวดหมู่หนังสือที่คงเหลือ */}
         <div className="lg:col-span-7 bg-[#FFFCF7]/95 backdrop-blur-sm border border-[#EAE0D2] rounded-[28px] p-5 sm:p-6 shadow-xs flex flex-col justify-between">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
             <div>
               <h2 className="text-[#4E342E] font-bold text-[21px]">
                 หมวดหมู่หนังสือที่คงเหลือ
               </h2>
             </div>
-            <span className="text-[11px] text-[#4B5E26] font-semibold font-mono bg-[#E9EBC8] border border-[#D4DAA8] px-3 py-1 rounded-full tabular-nums">
-              รวม {availableBooksCount.toLocaleString()} เล่ม
-            </span>
           </div>
 
-          <div className="flex-1 flex flex-col justify-center pt-3 min-h-[300px] overflow-x-auto">
+          <div className="flex-1 flex flex-col justify-center pt-3 min-h-[240px] overflow-x-auto">
             {availableBooksCount === 0 && isFetched ? (
-              <div className="h-56 flex flex-col items-center justify-center text-center p-4">
+              <div className="h-52 flex flex-col items-center justify-center text-center p-4">
                 <BookOpen className="w-8 h-8 text-[#B0A396] mb-2 opacity-50" />
                 <p className="text-xs font-medium text-[#6D5C50]">
                   ยังไม่มีหนังสือสถานะ Available ใน Google Sheet
@@ -988,186 +1104,146 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
 
-        {/* Right Column: 2 Stacked Cards */}
-        <div className="lg:col-span-5 flex flex-col gap-4">
-          {/* Top Card: สถิติการแลกออก */}
-          <div className="bg-[#FFFCF7]/95 backdrop-blur-xs border border-[#EAE0D2] rounded-[28px] p-5 shadow-xs space-y-3">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h3 className="text-[#4E342E] font-bold text-[21px]">
-                  สถิติการแลกออก
-                </h3>
-                <p className="text-[10px] text-[#7E7369]">
-                  จำนวนหนังสือที่ถูกแลกออกแล้ว (Status = Matched) แยกตามรหัส L / U
-                </p>
-              </div>
-              <span className="text-[11px] text-[#5C3A21] font-semibold font-mono bg-[#F3E7D3] border border-[#E0CEB5] px-2.5 py-0.5 rounded-full tabular-nums shrink-0">
-                รวม {totalMatchedCount.toLocaleString()} เล่ม
-              </span>
-            </div>
-
-            <div className="space-y-2.5">
-              <div className="h-[35px] bg-[#F8F2E7] border border-[#EAE0D2] rounded-2xl px-4 py-3 flex items-center justify-between">
-                <span className="text-xs text-[#4E342E] font-medium">
-                  หนังสือส่วนกลาง (L)
-                </span>
-                <span className="text-xs sm:text-sm font-bold text-[#5C3A21] font-mono tabular-nums">
-                  {matchedLCount.toLocaleString()} เล่ม
-                </span>
-              </div>
-
-              <div className="h-[35px] bg-[#F8F2E7] border border-[#EAE0D2] rounded-2xl px-4 py-3 flex items-center justify-between">
-                <span className="text-xs text-[#4E342E] font-medium">
-                  หนังสือจากผู้เข้าร่วม (U)
-                </span>
-                <span className="text-xs sm:text-sm font-bold text-[#4B5E26] font-mono tabular-nums">
-                  {matchedUCount.toLocaleString()} เล่ม
-                </span>
-              </div>
-            </div>
+        {/* Right Column: ประเภทสมาชิก */}
+        <div className="lg:col-span-5 bg-[#FFFCF7]/95 backdrop-blur-xs border border-[#EAE0D2] rounded-[28px] p-5 sm:p-6 shadow-xs flex flex-col justify-between">
+          <div>
+            <h3 className="text-[#4E342E] font-bold text-[21px]">
+              ประเภทสมาชิก
+            </h3>
           </div>
 
-          {/* Bottom Card: ประเภทสมาชิก */}
-          <div className="bg-[#FFFCF7]/95 backdrop-blur-xs border border-[#EAE0D2] rounded-[28px] p-5 shadow-xs flex-1 flex flex-col justify-between">
-            <div>
-              <h3 className="text-[#4E342E] font-bold text-[21px]">
-                ประเภทสมาชิก
-              </h3>
+          <div className="flex items-center justify-between gap-3 py-2 flex-wrap sm:flex-nowrap flex-1">
+            {/* Donut Chart */}
+            <div className="relative w-32 h-32 sm:w-36 sm:h-36 flex items-center justify-center shrink-0 mx-auto sm:mx-0">
+              <svg className="w-full h-full -rotate-90 transform" viewBox="0 0 120 120">
+                {/* Background Track */}
+                <circle
+                  cx="60"
+                  cy="60"
+                  r={memberTypeStats.donut.r}
+                  fill="none"
+                  stroke="#F1E7D9"
+                  strokeWidth="14"
+                />
+
+                {memberTypeStats.total > 0 && (
+                  <>
+                    {/* 1. CMU นักศึกษา (Fresh Leaf Green) */}
+                    {memberTypeStats.donut.sStudents > 0 && (
+                      <circle
+                        cx="60"
+                        cy="60"
+                        r={memberTypeStats.donut.r}
+                        fill="none"
+                        stroke="#6A8852"
+                        strokeWidth="14"
+                        strokeDasharray={`${memberTypeStats.donut.sStudents} ${memberTypeStats.donut.c}`}
+                        strokeDashoffset={memberTypeStats.donut.offsetStudents}
+                      />
+                    )}
+
+                    {/* 2. บุคคลทั่วไป (Warm Honey Wheat) */}
+                    {memberTypeStats.donut.sGeneral > 0 && (
+                      <circle
+                        cx="60"
+                        cy="60"
+                        r={memberTypeStats.donut.r}
+                        fill="none"
+                        stroke="#C69553"
+                        strokeWidth="14"
+                        strokeDasharray={`${memberTypeStats.donut.sGeneral} ${memberTypeStats.donut.c}`}
+                        strokeDashoffset={memberTypeStats.donut.offsetGeneral}
+                      />
+                    )}
+
+                    {/* 3. CMU Staff (Earth Brown) */}
+                    {memberTypeStats.donut.sStaff > 0 && (
+                      <circle
+                        cx="60"
+                        cy="60"
+                        r={memberTypeStats.donut.r}
+                        fill="none"
+                        stroke="#7D502E"
+                        strokeWidth="14"
+                        strokeDasharray={`${memberTypeStats.donut.sStaff} ${memberTypeStats.donut.c}`}
+                        strokeDashoffset={memberTypeStats.donut.offsetStaff}
+                      />
+                    )}
+
+                    {/* 4. CMU ศิษย์เก่า (Soft Sage Olive) */}
+                    {memberTypeStats.donut.sAlumni > 0 && (
+                      <circle
+                        cx="60"
+                        cy="60"
+                        r={memberTypeStats.donut.r}
+                        fill="none"
+                        stroke="#A8C078"
+                        strokeWidth="14"
+                        strokeDasharray={`${memberTypeStats.donut.sAlumni} ${memberTypeStats.donut.c}`}
+                        strokeDashoffset={memberTypeStats.donut.offsetAlumni}
+                      />
+                    )}
+                  </>
+                )}
+              </svg>
+
+              {/* Center Label inside Donut */}
+              <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                <span className="text-[23px] font-bold text-[#4E342E] font-mono">
+                  {memberTypeStats.total}
+                </span>
+                <span className="text-[15px] -mt-[10px] text-[#7E7369]">คน</span>
+              </div>
             </div>
 
-            <div className="flex items-center justify-between gap-3 py-2 flex-wrap sm:flex-nowrap">
-              {/* Donut Chart */}
-              <div className="relative w-32 h-32 sm:w-36 sm:h-36 flex items-center justify-center shrink-0 mx-auto sm:mx-0">
-                <svg className="w-full h-full -rotate-90 transform" viewBox="0 0 120 120">
-                  {/* Background Track */}
-                  <circle
-                    cx="60"
-                    cy="60"
-                    r={memberTypeStats.donut.r}
-                    fill="none"
-                    stroke="#F1E7D9"
-                    strokeWidth="14"
-                  />
-
-                  {memberTypeStats.total > 0 && (
-                    <>
-                      {/* 1. CMU นักศึกษา (Fresh Leaf Green) */}
-                      {memberTypeStats.donut.sStudents > 0 && (
-                        <circle
-                          cx="60"
-                          cy="60"
-                          r={memberTypeStats.donut.r}
-                          fill="none"
-                          stroke="#6A8852"
-                          strokeWidth="14"
-                          strokeDasharray={`${memberTypeStats.donut.sStudents} ${memberTypeStats.donut.c}`}
-                          strokeDashoffset={memberTypeStats.donut.offsetStudents}
-                        />
-                      )}
-
-                      {/* 2. บุคคลทั่วไป (Warm Honey Wheat) */}
-                      {memberTypeStats.donut.sGeneral > 0 && (
-                        <circle
-                          cx="60"
-                          cy="60"
-                          r={memberTypeStats.donut.r}
-                          fill="none"
-                          stroke="#C69553"
-                          strokeWidth="14"
-                          strokeDasharray={`${memberTypeStats.donut.sGeneral} ${memberTypeStats.donut.c}`}
-                          strokeDashoffset={memberTypeStats.donut.offsetGeneral}
-                        />
-                      )}
-
-                      {/* 3. CMU Staff (Earth Brown) */}
-                      {memberTypeStats.donut.sStaff > 0 && (
-                        <circle
-                          cx="60"
-                          cy="60"
-                          r={memberTypeStats.donut.r}
-                          fill="none"
-                          stroke="#7D502E"
-                          strokeWidth="14"
-                          strokeDasharray={`${memberTypeStats.donut.sStaff} ${memberTypeStats.donut.c}`}
-                          strokeDashoffset={memberTypeStats.donut.offsetStaff}
-                        />
-                      )}
-
-                      {/* 4. CMU ศิษย์เก่า (Soft Sage Olive) */}
-                      {memberTypeStats.donut.sAlumni > 0 && (
-                        <circle
-                          cx="60"
-                          cy="60"
-                          r={memberTypeStats.donut.r}
-                          fill="none"
-                          stroke="#A8C078"
-                          strokeWidth="14"
-                          strokeDasharray={`${memberTypeStats.donut.sAlumni} ${memberTypeStats.donut.c}`}
-                          strokeDashoffset={memberTypeStats.donut.offsetAlumni}
-                        />
-                      )}
-                    </>
-                  )}
-                </svg>
-
-                {/* Center Label inside Donut */}
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                  <span className="text-[23px] font-bold text-[#4E342E] font-mono">
-                    {memberTypeStats.total}
+            {/* Legend Items */}
+            <div className="space-y-2 text-[12px] text-[#4E342E] pr-1 flex-1">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#6A8852] shrink-0" />
+                  <span className="font-medium text-[17px] text-[#3E2723] truncate">
+                    CMU นักศึกษา
                   </span>
-                  <span className="text-[15px] -mt-[10px] text-[#7E7369]">คน</span>
                 </div>
+                <span className="text-[17px] font-bold text-[#3B4C1D] font-mono shrink-0">
+                  {memberTypeStats.percentages.students}% ({memberTypeStats.counts.students})
+                </span>
               </div>
 
-              {/* Legend Items */}
-              <div className="space-y-2 text-[12px] text-[#4E342E] pr-1 flex-1">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 truncate">
-                    <span className="w-2.5 h-2.5 rounded-full bg-[#6A8852] shrink-0" />
-                    <span className="font-medium text-[17px] text-[#3E2723] truncate">
-                      CMU นักศึกษา
-                    </span>
-                  </div>
-                  <span className="text-[17px] font-bold text-[#3B4C1D] font-mono shrink-0">
-                    {memberTypeStats.percentages.students}% ({memberTypeStats.counts.students})
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#C69553] shrink-0" />
+                  <span className="font-medium text-[17px] text-[#3E2723] truncate">
+                    บุคคลทั่วไป/นักเรียน
                   </span>
                 </div>
+                <span className="text-[17px] font-bold text-[#7D502E] font-mono shrink-0">
+                  {memberTypeStats.percentages.general}% ({memberTypeStats.counts.general})
+                </span>
+              </div>
 
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 truncate">
-                    <span className="w-2.5 h-2.5 rounded-full bg-[#C69553] shrink-0" />
-                    <span className="font-medium text-[17px] text-[#3E2723] truncate">
-                      บุคคลทั่วไป/นักเรียน
-                    </span>
-                  </div>
-                  <span className="text-[17px] font-bold text-[#7D502E] font-mono shrink-0">
-                    {memberTypeStats.percentages.general}% ({memberTypeStats.counts.general})
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#7D502E] shrink-0" />
+                  <span className="font-medium text-[17px] text-[#3E2723] truncate">
+                    CMU Staff
                   </span>
                 </div>
+                <span className="text-[17px] font-bold text-[#5C3A21] font-mono shrink-0">
+                  {memberTypeStats.percentages.staff}% ({memberTypeStats.counts.staff})
+                </span>
+              </div>
 
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 truncate">
-                    <span className="w-2.5 h-2.5 rounded-full bg-[#7D502E] shrink-0" />
-                    <span className="font-medium text-[17px] text-[#3E2723] truncate">
-                      CMU Staff
-                    </span>
-                  </div>
-                  <span className="text-[17px] font-bold text-[#5C3A21] font-mono shrink-0">
-                    {memberTypeStats.percentages.staff}% ({memberTypeStats.counts.staff})
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 truncate">
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#A8C078] shrink-0" />
+                  <span className="font-medium text-[17px] text-[#3E2723] truncate">
+                    CMU ศิษย์เก่า
                   </span>
                 </div>
-
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 truncate">
-                    <span className="w-2.5 h-2.5 rounded-full bg-[#A8C078] shrink-0" />
-                    <span className="font-medium text-[17px] text-[#3E2723] truncate">
-                      CMU ศิษย์เก่า
-                    </span>
-                  </div>
-                  <span className="text-[17px] font-bold text-[#4B5E26] font-mono shrink-0">
-                    {memberTypeStats.percentages.alumni}% ({memberTypeStats.counts.alumni})
-                  </span>
-                </div>
+                <span className="text-[17px] font-bold text-[#4B5E26] font-mono shrink-0">
+                  {memberTypeStats.percentages.alumni}% ({memberTypeStats.counts.alumni})
+                </span>
               </div>
             </div>
           </div>
@@ -1218,14 +1294,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <div className="flex items-center gap-1.5">
               <span className="w-3 h-3 rounded-sm bg-[#4B5E26] shrink-0" />
               <span className="font-medium text-[#3E2723]">แลกเปลี่ยนสำเร็จ</span>
-              <span className="font-mono font-bold text-[#3B4C1D] tabular-nums">
+              <span className="text-[15px] font-mono font-bold text-[#3B4C1D] tabular-nums">
                 {dailyExchangeStats.windowMatched.toLocaleString()} เล่ม
               </span>
             </div>
             <div className="flex items-center gap-1.5">
               <span className="w-3 h-3 rounded-sm bg-[#D9943B] shrink-0" />
               <span className="font-medium text-[#3E2723]">ได้รับบริจาค</span>
-              <span className="font-mono font-bold text-[#8B5A1F] tabular-nums">
+              <span className="text-[15px] font-mono font-bold text-[#8B5A1F] tabular-nums">
                 {dailyExchangeStats.windowDonated.toLocaleString()} เล่ม
               </span>
             </div>
@@ -1391,10 +1467,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {activeDailyItem && (
               <div className="bg-white/90 border border-[#EAE0D2] rounded-2xl px-4 py-2.5 flex items-center justify-between gap-2 flex-wrap text-xs">
                 <div className="flex items-center gap-2">
-                  <span className="font-semibold text-[#4E342E]">
+                  <span className="text-[15px] font-semibold text-[#4E342E]">
                     รายละเอียดวันที่ {activeDailyItem.fullLabel}
                   </span>
-                  <span className="text-[11px] bg-[#F8F2E7] text-[#5C3A21] border border-[#E5D8C8] px-2.5 py-0.5 rounded-full font-medium tabular-nums">
+                  <span className="text-[15px] bg-[#F8F2E7] text-[#5C3A21] border border-[#E5D8C8] px-2.5 py-0.5 rounded-full font-medium tabular-nums">
                     ผู้ร่วมกิจกรรม {activeDailyItem.transactions.toLocaleString()} ครั้ง
                   </span>
                 </div>
@@ -1507,7 +1583,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   key={item.label}
                   className="bg-white/90 border border-[#EAE0D2] rounded-2xl px-4 py-3 flex items-center justify-between shadow-xs"
                 >
-                  <span className="text-xs font-medium text-[#3E2723]">
+                  <span className="text-[17px] font-medium text-[#3E2723]">
                     {item.label}
                   </span>
                   <span
@@ -1534,17 +1610,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {longestChainList.length === 0 ? (
               <div className="bg-white/90 border border-[#EAE0D2] rounded-2xl p-5 text-center">
                 <p className="text-xs text-[#6D5C50] font-medium">
-                  ยังไม่มีหนังสือที่ผ่านการแลกเปลี่ยนซ้ำ (ExchangeCount &ge; 2) ใน Google Sheet
+                  ยังไม่มีเส้นทางการส่งต่อหนังสือใน Google Sheet
                 </p>
                 <p className="text-[11px] text-[#7E7369] mt-1">
-                  เมื่อผู้ใช้นำหนังสือ U มาแลกเปลี่ยนหมุนเวียนต่อเนื่อง ข้อมูลจะปรากฏที่นี่โดยอัตโนมัติ
+                  เมื่อผู้ใช้นำหนังสือ U มาแลกเปลี่ยนหนังสือบนชั้น ข้อมูลเส้นทางการส่งต่อจะปรากฏที่นี่โดยอัตโนมัติ
                 </p>
               </div>
             ) : (
-              <div className="relative space-y-2.5">
-                {/* Vertical dotted connector line running behind numbered circles */}
-                <div className="absolute left-[15px] top-4 bottom-4 w-0.5 border-l-2 border-dashed border-[#CBD6A6] pointer-events-none z-0" />
-
+              <div className="space-y-2.5">
                 {longestChainList.map((item) => (
                   <div key={item.step} className="flex items-center gap-3 relative z-10">
                     {/* Number Circle Badge */}
@@ -1553,18 +1626,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </div>
 
                     {/* Card Container */}
-                    <div className="flex-1 bg-white/90 border border-[#EAE0D2] rounded-2xl px-4 py-2.5 flex items-center justify-between shadow-xs">
-                      <span className="text-xs font-medium text-[#3E2723] truncate pr-2">
-                        {item.title}
-                      </span>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="font-mono text-xs font-bold text-[#4B5E26]">
-                          {item.code}
-                        </span>
-                        <span className="text-[10px] bg-[#DCE7C4] text-[#3B4C1D] px-2.5 py-0.5 rounded-full font-semibold">
-                          ส่งต่อ {item.count} ครั้ง
-                        </span>
+                    <div className="flex-1 min-w-0 bg-white/90 border border-[#EAE0D2] rounded-2xl px-4 py-2.5 flex items-center justify-between gap-2 shadow-xs">
+                      <div className="min-w-0 flex-1">
+                        <div
+                          className="text-xs font-medium text-[#3E2723] leading-snug break-words"
+                          title={item.flowLabel}
+                        >
+                          {item.flowLabel}
+                        </div>
+                        <div className="text-[15px] font-mono text-[#7E7369] mt-0.5">
+                          {item.codeTrail}
+                        </div>
                       </div>
+                      <span className="text-[10px] bg-[#DCE7C4] text-[#3B4C1D] px-2.5 py-0.5 rounded-full font-semibold shrink-0 whitespace-nowrap">
+                        ส่งต่อ {item.hops} ครั้ง
+                      </span>
                     </div>
                   </div>
                 ))}

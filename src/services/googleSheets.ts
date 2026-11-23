@@ -325,6 +325,14 @@ export async function fetchPublicSheetCSV(
   );
 }
 
+function parseNumericPrice(raw: any): number {
+  if (raw === undefined || raw === null) return 0;
+  const cleaned = String(raw).replace(/,/g, '').replace(/[^0-9.-]/g, '').trim();
+  if (!cleaned) return 0;
+  const num = Number(cleaned);
+  return Number.isFinite(num) && num >= 0 ? num : 0;
+}
+
 /**
  * Helper to dynamically map column positions from header names
  */
@@ -336,10 +344,16 @@ function getColumnIndexMap(headerRow: string[] | undefined, defaultHeaders: stri
 
   if (!headerRow || headerRow.length === 0) return map;
 
-  const normalize = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const normalize = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g, '');
   const normalizedHeaders = headerRow.map(normalize);
 
   const aliases: Record<string, string[]> = {
+    Code: ['code', 'bookcode', 'รหัส', 'รหัสหนังสือ'],
+    Title: ['title', 'booktitle', 'name', 'ชื่อเรื่อง', 'ชื่อหนังสือ'],
+    Category: ['category', 'bookcategory', 'type', 'หมวดหมู่', 'ประเภทหนังสือ', 'ประเภท'],
+    Price: ['price', 'bookprice', 'value', 'cost', 'ราคา', 'มูลค่า'],
+    Status: ['status', 'สถานะ'],
+    Source: ['source', 'ที่มา'],
     TotalBroughtCount: ['totalbroughtcount', 'booksbroughtcount', 'broughtcount', 'totalbrought'],
     MatchedCount: ['matchedcount', 'matchcount', 'bookstakencount', 'takencount'],
     MatchedTransactionId: ['matchedtransactionid', 'matchedtransaction', 'matchtransactionid', 'matchtxid'],
@@ -371,7 +385,7 @@ export async function fetchBooksFromSheet(
   if (accessToken) {
     try {
       const res = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:P2000`,
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:Z5000`,
         {
           cache: 'no-store',
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -434,7 +448,7 @@ export async function fetchBooksFromSheet(
       code: rawCode,
       title: cellTitle || 'Untitled',
       category: String(r[col.Category] || '').trim() || 'หนังสือทั่วไป',
-      price: Number(r[col.Price]) || 0,
+      price: parseNumericPrice(r[col.Price]),
       status: (rawStatus as any) || 'Available',
       source: (rawSource as any) || (rawCode.startsWith('U') ? 'User' : 'Library'),
       memberType: String(r[col.MemberType] || '').trim() || undefined,

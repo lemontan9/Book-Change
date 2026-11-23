@@ -76,9 +76,9 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
       const res = await googleSignIn(boundSheetId);
       if (res) {
         if (onGoogleConnected) {
-          onGoogleConnected(res.user, res.accessToken);
+          await onGoogleConnected(res.user, res.accessToken);
         }
-        onLoginSuccess(res.user.displayName || res.user.email || 'Google Admin');
+        await onLoginSuccess(res.user.displayName || res.user.email || 'Google Admin');
         onClose();
       }
     } catch (err: any) {
@@ -146,13 +146,13 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
         </div>
 
         {errorMsg && (
-          <div className="mb-3 p-2.5 rounded-2xl bg-[#FFF0F0] border border-[#FFCDCD] text-[11px] text-[#D32F2F] flex items-start gap-1.5">
-            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <div className="mb-3 p-3 rounded-2xl bg-[#FFF0F0] border border-[#FFCDCD] text-[11px] text-[#C62828] flex items-start gap-2 leading-relaxed">
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <span>{errorMsg}</span>
           </div>
         )}
 
-        {/* TAB 1: Google Sign-In (Authorized Google Sheet Editors) */}
+        {/* TAB 1: Google Sign-In (Authorized Google Sheet Users) */}
         {activeTab === 'superuser' && (
           <div className="space-y-3">
             <div className="bg-[#F8F2E7] border border-[#E5D8C8] rounded-2xl p-3.5 text-xs text-[#4E342E] space-y-1.5">
@@ -161,7 +161,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
                 <span>Log in ด้วยบัญชี Google Mail</span>
               </div>
               <p className="text-[11px] text-[#6D5C50] leading-relaxed">
-                สำหรับผู้มี Google Mail ที่ได้รับสิทธิ์เข้าถึง (Editor) ใน Google Sheet ที่ผูกกับระบบ เพื่อให้ข้อมูลหนังสือ Update อัตโนมัติ
+                สำหรับเจ้าหน้าที่ที่มีสิทธิ์เข้าใช้งาน Google Sheet ที่ผูกกับระบบ เพื่อซิงค์และอัปเดตข้อมูลหนังสืออัตโนมัติ (กรุณาติ๊กอนุญาตสิทธิ์ Google Sheets ในหน้าต่างยืนยันของ Google)
               </p>
               <div className="text-[10px] text-[#4B5E26] bg-[#DCE7C4] px-2.5 py-0.5 rounded-full font-semibold inline-block border border-[#C3D3A6]">
                 ตรวจสอบสิทธิ์จาก Google Sheet ที่ผูกกับระบบอัตโนมัติ

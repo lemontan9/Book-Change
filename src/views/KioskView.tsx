@@ -513,16 +513,37 @@ export const KioskView: React.FC<KioskViewProps> = ({
     books.filter((b) => b.status === 'Available')
   );
 
+  // Exact categories present in Available books from Google Sheet
+  const homeSheetCategories = React.useMemo(() => {
+    const counts = new Map<string, number>();
+    books
+      .filter((b) => b.status === 'Available')
+      .forEach((b) => {
+        const exactCat = (b.category || '').trim() || 'หนังสือทั่วไป';
+        counts.set(exactCat, (counts.get(exactCat) || 0) + 1);
+      });
+
+    return Array.from(counts.entries())
+      .map(([category, count]) => ({ category, count }))
+      .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category, 'th'));
+  }, [books]);
+
+  useEffect(() => {
+    if (
+      homeCategory !== 'all' &&
+      !homeSheetCategories.some((item) => item.category === homeCategory)
+    ) {
+      setHomeCategory('all');
+    }
+  }, [homeCategory, homeSheetCategories]);
+
   // Filter and sort for the home screen shelf
   const homeAvailableBooks = React.useMemo(() => {
     let result = books.filter((b) => b.status === 'Available');
 
     if (homeCategory !== 'all') {
-      const normalizedTarget = normalizeCategory(homeCategory);
       result = result.filter(
-        (b) =>
-          normalizeCategory(b.category) === normalizedTarget ||
-          b.category.toLowerCase().includes(homeCategory.toLowerCase())
+        (b) => ((b.category || '').trim() || 'หนังสือทั่วไป') === homeCategory
       );
     }
 
@@ -556,18 +577,13 @@ export const KioskView: React.FC<KioskViewProps> = ({
     );
   });
 
-  const categoryOptions =
-    settings.categories && settings.categories.length > 0
-      ? settings.categories
-      : [
-          'หนังสือทั่วไป',
-          'หนังสือเรียน/วิชาการ',
-          'หนังสือเยาวชน',
-          'การ์ตูน/มังงะ',
-          'นวนิยาย/วรรณกรรม',
-          'พัฒนาตนเอง/จิตวิทยา',
-          'เรื่องสั้น/รวมเรื่อง',
-        ];
+  const categoryOptions = React.useMemo(
+    () =>
+      (settings.categories || [])
+        .map((cat) => String(cat || '').trim())
+        .filter((cat, idx, arr) => cat !== '' && arr.indexOf(cat) === idx),
+    [settings.categories]
+  );
 
   const getShortCatLabel = (cat: string) => {
     const norm = normalizeCategory(cat);
@@ -734,28 +750,20 @@ export const KioskView: React.FC<KioskViewProps> = ({
                     >
                       ทั้งหมด ({books.filter((b) => b.status === 'Available').length})
                     </button>
-                    {categoryOptions.map((cat) => {
-                      const shortLabel = getShortCatLabel(cat);
-                      const normCat = normalizeCategory(cat);
-                      const count = books.filter(
-                        (b) =>
-                          b.status === 'Available' &&
-                          (normalizeCategory(b.category) === normCat || b.category.includes(cat))
-                      ).length;
-                      if (count === 0) return null;
-                      const isActive = homeCategory === cat;
+                    {homeSheetCategories.map(({ category, count }) => {
+                      const isActive = homeCategory === category;
                       return (
                         <button
-                          key={cat}
+                          key={category}
                           type="button"
-                          onClick={() => setHomeCategory(cat)}
+                          onClick={() => setHomeCategory(category)}
                           className={`px-3.5 py-1.5 rounded-full shrink-0 font-semibold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                             isActive
                               ? 'bg-[#7D502E] text-white shadow-xs'
                               : 'bg-white text-[#4E342E] hover:bg-[#F8F2E7] border border-[#E5D8C8]'
                           }`}
                         >
-                          <span>{shortLabel}</span>
+                          <span>{category}</span>
                           <span
                             className={`text-[11px] font-bold px-1.5 py-0.2 rounded-full tabular-nums ${
                               isActive ? 'bg-white/25 text-white' : 'bg-[#F2EAE0] text-[#7D502E]'
@@ -803,7 +811,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
                     homeAvailableBooks.map((book) => {
                       const cover = book.coverImage;
                       const ecoTheme = getEcoCardTheme(book.code || book.title || 'cmu');
-                      const shortCat = getShortCatLabel(book.category);
+                      const exactCat = (book.category || '').trim() || 'หนังสือทั่วไป';
 
                       return (
                         <div
@@ -861,8 +869,8 @@ export const KioskView: React.FC<KioskViewProps> = ({
                             <p className="text-sm font-bold text-[#3E2723] line-clamp-1 group-hover:text-[#7D502E] transition-colors">
                               {book.title}
                             </p>
-                            <p className="text-[11px] text-[#7E7369] mt-0.5 truncate font-medium">
-                              {shortCat}
+                            <p className="text-[11px] text-[#7E7369] mt-0.5 truncate font-medium" title={exactCat}>
+                              {exactCat}
                             </p>
                           </div>
                         </div>

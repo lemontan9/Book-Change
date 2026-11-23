@@ -243,7 +243,9 @@ export class StorageService {
       const rawCats = Array.isArray(parsed.categories) && parsed.categories.length > 0
         ? parsed.categories
         : INITIAL_SETTINGS.categories;
-      const deduplicatedCats = Array.from(new Set(rawCats.map((c: string) => normalizeCategory(c))));
+      const deduplicatedCats = Array.from(
+        new Set(rawCats.map((c: string) => String(c || '').trim()).filter(Boolean))
+      );
 
       const merged: SystemSettings = {
         ...INITIAL_SETTINGS,

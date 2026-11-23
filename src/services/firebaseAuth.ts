@@ -20,7 +20,10 @@ export const SCOPES = [
 
 const provider = new GoogleAuthProvider();
 SCOPES.forEach((scope) => provider.addScope(scope));
-provider.setCustomParameters({ prompt: 'select_account' });
+provider.setCustomParameters({
+  prompt: 'select_account consent',
+  include_granted_scopes: 'true',
+});
 
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
@@ -30,26 +33,48 @@ export interface SpreadsheetAccessResult {
   canEdit: boolean;
   title?: string;
   reason?: string;
+  errorCode?: 'SCOPE_MISSING' | 'TOKEN_EXPIRED' | 'NO_SHEET_ACCESS' | 'UNKNOWN';
+}
+
+function isInsufficientScopeError(errJson: any): boolean {
+  const status = String(errJson?.error?.status || '').toUpperCase();
+  const message = String(errJson?.error?.message || '').toLowerCase();
+  const details = Array.isArray(errJson?.error?.details) ? errJson.error.details : [];
+  const hasScopeDetail = details.some(
+    (d: any) =>
+      String(d?.reason || '').toUpperCase() === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' ||
+      String(d?.message || '').toLowerCase().includes('insufficient')
+  );
+  return (
+    hasScopeDetail ||
+    status === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' ||
+    message.includes('insufficient authentication scopes') ||
+    message.includes('insufficient permission')
+  );
 }
 
 /**
- * Verifies that the signed-in Google account has access (Editor permission)
- * to the Google Spreadsheet currently bound to the system.
+ * Verifies that the signed-in Google account has access to the Google Spreadsheet
+ * currently bound to the system, and detects whether the account has Editor permission.
  */
 export async function verifySpreadsheetAccess(
   accessToken: string,
   spreadsheetId?: string
 ): Promise<SpreadsheetAccessResult> {
-  const targetId =
+  const rawId =
     (spreadsheetId || '').trim() ||
     StorageService.getSettings().connectedSpreadsheetId ||
     ACTIVE_SPREADSHEET_ID;
+
+  const targetId =
+    rawId && !rawId.startsWith('172FuZL2') ? rawId : ACTIVE_SPREADSHEET_ID;
 
   if (!targetId) {
     return {
       hasAccess: false,
       canEdit: false,
       reason: 'ยังไม่ได้ผูก Google Spreadsheet ID กับระบบ',
+      errorCode: 'NO_SHEET_ACCESS',
     };
   }
 
@@ -70,79 +95,99 @@ export async function verifySpreadsheetAccess(
         hasAccess: false,
         canEdit: false,
         reason: 'สิทธิ์การเชื่อมต่อ Google หมดอายุ กรุณาเข้าสู่ระบบใหม่อีกครั้ง',
-      };
-    }
-
-    if (metaRes.status === 403 || metaRes.status === 404) {
-      return {
-        hasAccess: false,
-        canEdit: false,
-        reason:
-          'บัญชี Google นี้ไม่มีสิทธิ์เข้าถึง Google Sheet ที่ผูกกับระบบ กรุณาติดต่อผู้ดูแลเพื่อขอสิทธิ์แชร์ (Editor) บนไฟล์ Google Sheet',
+        errorCode: 'TOKEN_EXPIRED',
       };
     }
 
     if (!metaRes.ok) {
       const errJson = await metaRes.json().catch(() => null);
+      if (metaRes.status === 403 && isInsufficientScopeError(errJson)) {
+        return {
+          hasAccess: false,
+          canEdit: false,
+          reason:
+            'ยังไม่ได้ติ๊กอนุญาตสิทธิ์เข้าถึง Google Sheets ในหน้าต่างยืนยันของ Google กรุณากดลงชื่อเข้าใช้อีกครั้งแล้วติ๊กเลือกสิทธิ์ Google Sheets ให้ครบก่อนกด Continue',
+          errorCode: 'SCOPE_MISSING',
+        };
+      }
+
+      if (metaRes.status === 403 || metaRes.status === 404) {
+        return {
+          hasAccess: false,
+          canEdit: false,
+          reason:
+            'บัญชี Google นี้ไม่มีสิทธิ์เข้าถึง Google Sheet ที่ผูกกับระบบ กรุณาตรวจสอบว่าได้แชร์ไฟล์ Google Sheet (สิทธิ์ Editor) ให้กับอีเมลนี้แล้ว',
+          errorCode: 'NO_SHEET_ACCESS',
+        };
+      }
+
       return {
         hasAccess: false,
         canEdit: false,
         reason:
           errJson?.error?.message ||
           'ไม่สามารถตรวจสอบสิทธิ์การเข้าถึง Google Sheet ที่ผูกกับระบบได้',
+        errorCode: 'UNKNOWN',
       };
     }
 
     const metaData = await metaRes.json().catch(() => ({}));
     const sheetTitle: string | undefined = metaData?.properties?.title;
 
-    // 2. Non-mutating Editor ACL check via empty batchUpdate requests array.
-    // Google Sheets API enforces write ACL (403) before validating empty requests (200/400).
-    const editCheckRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(targetId)}:batchUpdate`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ requests: [] }),
+    // 2. Non-mutating Editor ACL probe via empty batchUpdate requests array.
+    // Google Sheets API checks write ACL before validating empty requests (200/400).
+    // Even if account is Viewer (403 PERMISSION_DENIED), allow login with canEdit: false
+    // so staff with Sheet access can still log in and sync data without being locked out.
+    let canEdit = true;
+    try {
+      const editCheckRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(targetId)}:batchUpdate`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ requests: [] }),
+        }
+      );
+
+      if (editCheckRes.status === 401) {
+        return {
+          hasAccess: false,
+          canEdit: false,
+          title: sheetTitle,
+          reason: 'สิทธิ์การเชื่อมต่อ Google หมดอายุ กรุณาเข้าสู่ระบบใหม่อีกครั้ง',
+          errorCode: 'TOKEN_EXPIRED',
+        };
       }
-    );
 
-    if (editCheckRes.status === 403) {
-      return {
-        hasAccess: false,
-        canEdit: false,
-        title: sheetTitle,
-        reason:
-          'บัญชี Google นี้มีสิทธิ์เพียงอ่านอย่างเดียว (Viewer) กรุณาขอสิทธิ์ผู้แก้ไข (Editor) บน Google Sheet ที่ผูกกับระบบก่อนเข้าสู่ระบบ',
-      };
-    }
-
-    if (editCheckRes.status === 401) {
-      return {
-        hasAccess: false,
-        canEdit: false,
-        title: sheetTitle,
-        reason: 'สิทธิ์การเชื่อมต่อ Google หมดอายุ กรุณาเข้าสู่ระบบใหม่อีกครั้ง',
-      };
-    }
-
-    // 200 OK or 400 INVALID_ARGUMENT (empty requests after passing ACL check) confirms Editor/Owner access
-    if (editCheckRes.ok || editCheckRes.status === 400) {
-      return {
-        hasAccess: true,
-        canEdit: true,
-        title: sheetTitle,
-      };
+      if (editCheckRes.status === 403) {
+        const editErrJson = await editCheckRes.json().catch(() => null);
+        if (isInsufficientScopeError(editErrJson)) {
+          return {
+            hasAccess: false,
+            canEdit: false,
+            title: sheetTitle,
+            reason:
+              'ยังไม่ได้ติ๊กอนุญาตสิทธิ์แก้ไข Google Sheets กรุณากดลงชื่อเข้าใช้อีกครั้งและติ๊กเลือกสิทธิ์ทั้งหมดในหน้าต่างของ Google',
+            errorCode: 'SCOPE_MISSING',
+          };
+        }
+        // Account has valid read access to the Sheet (metaRes succeeded), just not Editor
+        canEdit = false;
+      } else {
+        canEdit = editCheckRes.ok || editCheckRes.status === 400;
+      }
+    } catch (probeErr) {
+      console.warn('Non-fatal Editor ACL probe error:', probeErr);
+      canEdit = true;
     }
 
     return {
-      hasAccess: false,
-      canEdit: false,
+      hasAccess: true,
+      canEdit,
       title: sheetTitle,
-      reason: 'ไม่สามารถยืนยันสิทธิ์การแก้ไข Google Sheet ที่ผูกกับระบบได้',
     };
   } catch (err: any) {
     console.error('Spreadsheet access verification error:', err);
@@ -150,6 +195,7 @@ export async function verifySpreadsheetAccess(
       hasAccess: false,
       canEdit: false,
       reason: 'เกิดข้อผิดพลาดระหว่างตรวจสอบสิทธิ์ Google Sheet กรุณาลองใหม่อีกครั้ง',
+      errorCode: 'UNKNOWN',
     };
   }
 }
@@ -173,9 +219,31 @@ export const initAuth = (
   });
 };
 
+function formatFirebaseAuthError(error: any): string {
+  const code = String(error?.code || '');
+  const msg = String(error?.message || '');
+
+  if (code === 'auth/popup-blocked') {
+    return 'เบราว์เซอร์บล็อกหน้าต่าง Pop-up กรุณาอนุญาต Pop-up สำหรับเว็บไซต์นี้แล้วกดลงชื่อเข้าใช้อีกครั้ง';
+  }
+  if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+    return 'หน้าต่างลงชื่อเข้าใช้ Google ถูกปิดก่อนเสร็จสิ้น — หากหน้า Google แจ้ง "Access blocked / Error 403" ผู้ดูแลระบบต้องเพิ่มอีเมลเจ้าหน้าที่ใน Test users หรือกด Publish App ใน Google Cloud Console (OAuth consent screen) ก่อน';
+  }
+  if (code === 'auth/unauthorized-domain') {
+    return 'โดเมนของเว็บไซต์นี้ยังไม่ได้รับอนุญาตใน Firebase Authentication (Authorized domains) กรุณาติดต่อผู้ดูแลระบบ';
+  }
+  if (code === 'auth/network-request-failed') {
+    return 'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ Google ได้ กรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่';
+  }
+  if (msg.toLowerCase().includes('access_denied')) {
+    return 'Google ปฏิเสธการเข้าสู่ระบบ (access_denied) — หากอีเมลนี้ไม่ใช่บัญชีผู้สร้างแอป กรุณาให้ผู้ดูแลเพิ่มอีเมลใน Test users หรือ Publish App ใน Google Cloud Console';
+  }
+  return msg || 'เกิดข้อผิดพลาดในการลงชื่อเข้าใช้ด้วย Google';
+}
+
 export const googleSignIn = async (
   spreadsheetId?: string
-): Promise<{ user: User; accessToken: string; spreadsheetTitle?: string } | null> => {
+): Promise<{ user: User; accessToken: string; spreadsheetTitle?: string; canEdit?: boolean } | null> => {
   try {
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
@@ -202,10 +270,12 @@ export const googleSignIn = async (
       user: result.user,
       accessToken: cachedAccessToken,
       spreadsheetTitle: accessCheck.title,
+      canEdit: accessCheck.canEdit,
     };
   } catch (error: any) {
     console.error('Google Sign-In Error:', error);
-    throw error;
+    const friendlyMessage = error?.code ? formatFirebaseAuthError(error) : error?.message || formatFirebaseAuthError(error);
+    throw new Error(friendlyMessage);
   } finally {
     isSigningIn = false;
   }
