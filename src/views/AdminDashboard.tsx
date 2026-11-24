@@ -687,7 +687,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   return (
     <div className="pb-24 pt-5 max-w-6xl mx-auto px-4 min-h-[calc(100vh-8rem)] font-sans space-y-4">
       {/* 1. Top Header Card */}
-      <div className="bg-[#FFFCF7]/95 backdrop-blur-sm border border-[#EAE0D2] rounded-[28px] sm:rounded-[34px] p-5 sm:p-6 shadow-[0_18px_48px_rgba(92,58,33,0.09)] flex items-center justify-between gap-4 flex-wrap">
+      <div className="bg-[#FFFCF7]/95 backdrop-blur-sm border border-[#EAE0D2] rounded-[28px] sm:rounded-[34px] px-5 pb-5 sm:px-6 sm:pb-6 pt-[9px] h-[50px] -mt-[8px] shadow-[0_18px_48px_rgba(92,58,33,0.09)] flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-lg sm:text-xl font-bold text-[#4E342E] tracking-tight">
             ระบบแลกเปลี่ยนหนังสือ สำนักหอสมุด
@@ -701,7 +701,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       {/* 2. Sub-header Navigation Pill Bar + Action Button */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="flex items-center justify-between gap-3 flex-wrap -mt-[8px]">
         {/* Navigation Tabs Pill */}
         <div className="bg-[#FFFCF7]/95 border border-[#EAE0D2] rounded-full p-1.5 flex items-center gap-1 shadow-xs flex-wrap">
           <button
@@ -825,7 +825,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       )}
 
       {/* 4. Row 1: Four Overview Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 -mt-[7px]">
         {/* Warm Wheat Card: ผู้เข้าร่วมกิจกรรมทั้งหมด */}
         <div className="min-h-[104px] bg-[#EFE2CA] border border-[#DFCEB2] rounded-[24px] p-4 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2">
@@ -904,19 +904,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       {/* 4.5 Row 2: Exchange Highlights (Left 7 cols) + Exchange Breakdown (Right 5 cols) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch pt-0 -mt-[6px] h-[154.633px]">
         {/* Left 7 cols: หนังสือที่ถูกแลกออกแล้ว + มูลค่าหนังสือที่ประหยัดได้ */}
         <div className="lg:col-span-7 grid grid-cols-1 sm:grid-cols-12 gap-4 items-stretch">
           {/* Soft Warm Clay Card: หนังสือที่ถูกแลกออกแล้ว */}
-          <div className="sm:col-span-5 bg-[#F4E6DA] border border-[#E2CBB7] rounded-[24px] p-5 shadow-xs flex flex-col justify-between min-h-[140px]">
-            <div className="flex items-center justify-between gap-2">
+          <div className="sm:col-span-5 bg-[#F4E6DA] border border-[#E2CBB7] rounded-[24px] p-5 shadow-xs flex flex-col justify-between min-h-[140px] h-[140px]">
+            <div className="flex items-center justify-between gap-2 -mt-[8px]">
               <span className="text-xs sm:text-sm font-semibold text-[#5C3A21]">
                 หนังสือที่ถูกแลกออกแล้ว
               </span>
               <Repeat className="w-4 h-4 text-[#8B5530]/80 shrink-0" />
             </div>
             <div className="mt-3">
-              <div className="text-3xl sm:text-4xl font-bold text-[#4E342E] tracking-tight tabular-nums">
+              <div className="text-3xl sm:text-4xl font-bold text-[#4E342E] tracking-tight tabular-nums -mt-[3px]">
                 {totalMatchedCount.toLocaleString()}
                 <span className="text-xs sm:text-sm font-normal text-[#6D5C50] ml-1.5">เล่ม</span>
               </div>
@@ -924,8 +924,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           {/* Highlight Eco Savings Card: มูลค่าหนังสือที่ประหยัดได้ */}
-          <div className="sm:col-span-7 bg-gradient-to-br from-[#4B5E26] to-[#3B4C1D] border border-[#3B4C1D] rounded-[24px] p-5 shadow-sm flex flex-col justify-between text-white relative overflow-hidden min-h-[140px]">
-            <div className="flex items-center justify-between gap-2 relative z-10">
+          <div className="sm:col-span-7 bg-gradient-to-br from-[#4B5E26] to-[#3B4C1D] border border-[#3B4C1D] rounded-[24px] p-5 shadow-sm flex flex-col justify-between text-white relative overflow-hidden min-h-[140px] h-[140px]">
+            <div className="flex items-center justify-between gap-2 relative z-10 -mt-[9px]">
               <span className="text-xs sm:text-sm font-semibold text-[#F4F8EA]">
                 มูลค่าหนังสือที่ประหยัดได้
               </span>
@@ -957,8 +957,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
 
         {/* Right 5 cols: สถิติการแลกออก */}
-        <div className="lg:col-span-5 bg-[#FFFCF7]/95 backdrop-blur-xs border border-[#EAE0D2] rounded-[28px] p-5 shadow-xs flex flex-col justify-between gap-3">
-          <div className="flex items-start justify-between gap-2">
+        <div className="lg:col-span-5 bg-[#FFFCF7]/95 backdrop-blur-xs border border-[#EAE0D2] rounded-[28px] px-5 pb-5 pt-[20px] h-[140px] mt-[1px] shadow-xs flex flex-col justify-between gap-3">
+          <div className="flex items-start justify-between gap-2 -mt-[10px]">
             <div>
               <h3 className="text-[#4E342E] font-bold text-[21px]">
                 สถิติการแลกออก
@@ -969,7 +969,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </span>
           </div>
 
-          <div className="space-y-2.5">
+          <div className="space-y-2.5 -mt-[9px]">
             <div className="h-[35px] bg-[#F8F2E7] border border-[#EAE0D2] rounded-2xl px-4 py-3 flex items-center justify-between">
               <span className="text-xs text-[#4E342E] font-medium">
                 หนังสือส่วนกลาง (L)
@@ -992,9 +992,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       {/* 5. Row 3: Charts Section (Left 7 cols: หมวดหมู่หนังสือที่คงเหลือ, Right 5 cols: ประเภทสมาชิก) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch -mt-[7px] h-[329.633px]">
         {/* Left Column: หมวดหมู่หนังสือที่คงเหลือ */}
-        <div className="lg:col-span-7 bg-[#FFFCF7]/95 backdrop-blur-sm border border-[#EAE0D2] rounded-[28px] p-5 sm:p-6 shadow-xs flex flex-col justify-between">
+        <div className="lg:col-span-7 bg-[#FFFCF7]/95 backdrop-blur-sm border border-[#EAE0D2] rounded-[28px] p-5 sm:p-6 h-[320px] shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
             <div>
               <h2 className="text-[#4E342E] font-bold text-[21px]">
@@ -1111,7 +1111,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
 
         {/* Right Column: ประเภทสมาชิก */}
-        <div className="lg:col-span-5 bg-[#FFFCF7]/95 backdrop-blur-xs border border-[#EAE0D2] rounded-[28px] p-5 sm:p-6 shadow-xs flex flex-col justify-between">
+        <div className="lg:col-span-5 bg-[#FFFCF7]/95 backdrop-blur-xs border border-[#EAE0D2] rounded-[28px] p-5 sm:p-6 h-[320px] shadow-xs flex flex-col justify-between">
           <div>
             <h3 className="text-[#4E342E] font-bold text-[21px]">
               ประเภทสมาชิก
@@ -1257,7 +1257,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       {/* 5.5 Daily Book Exchange & Donation Statistics Chart */}
-      <div className="bg-[#FFFCF7]/95 backdrop-blur-sm border border-[#EAE0D2] rounded-[28px] p-5 sm:p-6 shadow-xs space-y-4">
+      <div className="bg-[#FFFCF7]/95 backdrop-blur-sm border border-[#EAE0D2] rounded-[28px] px-5 pb-5 sm:px-6 sm:pb-6 pt-[23px] -mt-[11px] shadow-xs space-y-4">
         <div className="flex items-start sm:items-center justify-between gap-3 flex-wrap">
           <div>
             <div className="flex items-center gap-2 flex-wrap">
