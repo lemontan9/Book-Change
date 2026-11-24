@@ -36,11 +36,22 @@ export const INITIAL_SETTINGS: SystemSettings = {
     'พัฒนาตนเอง/จิตวิทยา',
     'เรื่องสั้น/รวมเรื่อง',
   ],
-  exchangeTerms: `1. หนังสือที่นำมาแลกต้องอยู่ในสภาพดี ไม่ฉีกขาด
-2. สามารถแลกหนังสือได้ตามจำนวนที่นำมาเท่านั้น
-3. หนังสือที่นำมาแลกแล้ว จะถือเป็นการส่งต่อให้ผู้อื่น ไม่สามารถขอคืนได้
-4. หากรหัสหนังสือที่ท่านเลือกถูกผู้อื่นแลกไปแล้ว จะต้องเลือกรหัสใหม่
-5. หนังสือที่ไม่ประสงค์จะแลกเปลี่ยน หรือแลกไม่ครบตามจำนวน สามารถระบุให้เป็น "หนังสือบริจาค" ได้`,
+  exchangeTerms: `1. อัตราการแลกเปลี่ยนและเงื่อนไข
+- แลกเปลี่ยนแบบ 1 ต่อ 1: นำหนังสือมา 1 เล่ม เลือกรับกลับได้ 1 เล่ม
+- ติดสติกเกอร์รหัส: กรุณาติดสติกเกอร์รหัสที่ได้รับบริเวณหน้าปกหนังสือให้ถูกต้องตรงตามลำดับ
+- ส่งต่อแล้วไม่รับคืน: หนังสือที่นำมาแลกจะถูกส่งต่อให้ผู้อื่นทันที ไม่สามารถขอรับคืนในภายหลังได้
+- การพิจารณาของเจ้าหน้าที่: ขอสงวนสิทธิ์ในการปฏิเสธหนังสือที่ไม่ตรงตามเงื่อนไข เพื่อรักษามาตรฐานของกิจกรรม
+2. ลักษณะหนังสือที่ "รับแลก"
+- ประเภทหนังสือ: รับหนังสือลิขสิทธิ์แท้ทุกประเภท เช่น นวนิยาย การ์ตูน หนังสือความรู้ทั่วไป หนังสือเรียน ฯลฯ (เนื้อหาเหมาะสม ไม่ผิดกฎหมาย ไม่รุนแรง และไม่เป็นสื่อ 18+)
+- ปีที่พิมพ์: พิมพ์มาแล้ว ไม่เกิน 15 ปี นับจากปีปัจจุบัน
+3. สภาพหนังสือ:
+- ปกและเนื้อในสมบูรณ์ ไม่ฉีกขาด หน้าไม่หลุด หรือสูญหาย
+- ไม่เปียกชื้น ไม่บวมน้ำ ไม่มีเชื้อรา กลิ่นอับ หรือรอยแมลงกัดแทะ
+- มีรอยขีดเขียนหรือไฮไลต์ได้เล็กน้อย แต่ต้องยังอ่านเนื้อหาได้ชัดเจน
+4. สิ่งพิมพ์ที่ "งดรับแลก"
+- หนังสือแจกฟรี หนังสือธรรมะ หนังสือที่มีเนื้อหาเก่าล้าสมัย
+- เอกสารประกอบการเรียนที่เย็บเล่มเอง หรือเอกสารสำเนา (ก๊อปปี้)
+- เอกสารทางราชการ ระเบียบ มาตรฐาน และรายงานประจำปีของหน่วยงานต่างๆ`,
   memberTypes: [
     'CMU นักศึกษา',
     'CMU Staff',
@@ -247,9 +258,31 @@ export class StorageService {
         new Set(rawCats.map((c: string) => String(c || '').trim()).filter(Boolean))
       );
 
+      const isLegacyTerms = (terms?: string): boolean => {
+        const t = (terms || '').trim();
+        if (!t) return true;
+        if (
+          t.includes('หนังสือที่นำมาแลกต้องอยู่ในสภาพดี ไม่ฉีกขาด') &&
+          t.includes('สามารถแลกหนังสือได้ตามจำนวนที่นำมาเท่านั้น')
+        ) {
+          return true;
+        }
+        if (
+          t.includes('เป็นหนังสือจริงทุกประเภท เช่น นวนิยาย การ์ตูน หนังสือความรู้ทั่วไป') &&
+          t.includes('ไม่รับหนังสือธรรมะ') &&
+          !t.includes('อัตราการแลกเปลี่ยนและเงื่อนไข')
+        ) {
+          return true;
+        }
+        return false;
+      };
+
       const merged: SystemSettings = {
         ...INITIAL_SETTINGS,
         ...parsed,
+        exchangeTerms: isLegacyTerms(parsed.exchangeTerms)
+          ? INITIAL_SETTINGS.exchangeTerms
+          : parsed.exchangeTerms,
         categories: deduplicatedCats,
         connectedSpreadsheetId,
         participationHistoryOptions:
@@ -323,25 +356,52 @@ export class StorageService {
   }
 
   /**
-   * Retrieves all unique codes that have ever been allocated or used in the system.
-   * This guarantees codes are never recycled, even if books are deleted or removed.
+   * Synchronizes the code registry and L/U high-water counters strictly from the authoritative Books list.
+   * When the Google Sheet Books tab has no U codes (e.g. cleared for production launch),
+   * U_COUNTER resets cleanly to 0 so the next exchange starts at U1, U2, U3... without gaps or duplicates.
    */
-  static getUsedCodesSet(): Set<string> {
+  static syncUsedCodesFromBooks(books: Book[]): void {
+    const set = new Set<string>();
+    let maxL = 0;
+    let maxU = 0;
+
+    books.forEach((b) => {
+      const code = (b?.code || '').trim().toUpperCase();
+      if (!code || code === 'DONATION') return;
+      set.add(code);
+
+      if (/^L\d+$/.test(code)) {
+        const num = parseInt(code.substring(1), 10);
+        if (!isNaN(num) && num > maxL) maxL = num;
+      } else if (/^U\d+$/.test(code)) {
+        const num = parseInt(code.substring(1), 10);
+        if (!isNaN(num) && num > maxU) maxU = num;
+      }
+    });
+
+    localStorage.setItem(STORAGE_KEYS.USED_CODES, JSON.stringify(Array.from(set)));
+    localStorage.setItem(STORAGE_KEYS.L_COUNTER, maxL.toString());
+    localStorage.setItem(STORAGE_KEYS.U_COUNTER, maxU.toString());
+  }
+
+  /**
+   * Retrieves all unique primary book codes (b.code) currently allocated or committed in the system.
+   * Does NOT include legacy dummy INITIAL_BOOKS, matchedWithCode links, or stale Transactions rows
+   * so clearing U books in Google Sheet allows clean U1, U2, U3... sequencing with zero duplicates.
+   */
+  static getUsedCodesSet(extraBooks?: Book[]): Set<string> {
     const raw = localStorage.getItem(STORAGE_KEYS.USED_CODES);
     const set = new Set<string>();
-
-    // Seed initial baseline catalog codes (L1-L8, U1-U4)
-    INITIAL_BOOKS.forEach((b) => {
-      if (b.code) set.add(b.code.toUpperCase());
-      if (b.matchedWithCode) set.add(b.matchedWithCode.toUpperCase());
-    });
 
     if (raw) {
       try {
         const arr = JSON.parse(raw);
         if (Array.isArray(arr)) {
           arr.forEach((c) => {
-            if (typeof c === 'string' && c.trim()) set.add(c.trim().toUpperCase());
+            if (typeof c === 'string' && c.trim()) {
+              const clean = c.trim().toUpperCase();
+              if (/^[LU]\d+$/.test(clean)) set.add(clean);
+            }
           });
         }
       } catch {
@@ -349,15 +409,15 @@ export class StorageService {
       }
     }
 
-    // Include any active stored books
+    // Include any active stored books (primary key Code only)
     try {
       const booksRaw = localStorage.getItem(STORAGE_KEYS.BOOKS);
       if (booksRaw) {
         const books = JSON.parse(booksRaw);
         if (Array.isArray(books)) {
           books.forEach((b: any) => {
-            if (b?.code) set.add(String(b.code).trim().toUpperCase());
-            if (b?.matchedWithCode) set.add(String(b.matchedWithCode).trim().toUpperCase());
+            const clean = String(b?.code || '').trim().toUpperCase();
+            if (/^[LU]\d+$/.test(clean)) set.add(clean);
           });
         }
       }
@@ -365,24 +425,12 @@ export class StorageService {
       // ignore
     }
 
-    // Include historical transactions
-    try {
-      const txRaw = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-      if (txRaw) {
-        const txs = JSON.parse(txRaw);
-        if (Array.isArray(txs)) {
-          txs.forEach((t: any) => {
-            if (Array.isArray(t?.booksBrought)) {
-              t.booksBrought.forEach((c: any) => set.add(String(c).trim().toUpperCase()));
-            }
-            if (Array.isArray(t?.booksTaken)) {
-              t.booksTaken.forEach((c: any) => set.add(String(c).trim().toUpperCase()));
-            }
-          });
-        }
-      }
-    } catch {
-      // ignore
+    // Include live in-memory books if provided
+    if (Array.isArray(extraBooks)) {
+      extraBooks.forEach((b) => {
+        const clean = String(b?.code || '').trim().toUpperCase();
+        if (/^[LU]\d+$/.test(clean)) set.add(clean);
+      });
     }
 
     return set;
@@ -437,10 +485,9 @@ export class StorageService {
   static saveBooks(books: Book[]): void {
     const sorted = this.sortBooks(books);
     localStorage.setItem(STORAGE_KEYS.BOOKS, JSON.stringify(sorted));
-    // Immediately register all saved book codes into the permanent non-recyclable registry
+    // Register primary book codes (b.code) into the active non-duplicate registry
     sorted.forEach((b) => {
       if (b.code) this.registerUsedCode(b.code);
-      if (b.matchedWithCode) this.registerUsedCode(b.matchedWithCode);
     });
   }
 
@@ -519,9 +566,6 @@ export class StorageService {
     const filtered = all.filter((item) => item.id !== t.id);
     filtered.unshift(t);
     localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(filtered));
-    // Immediately register all involved codes permanently
-    if (t.booksBrought) this.registerUsedCodes(t.booksBrought);
-    if (t.booksTaken) this.registerUsedCodes(t.booksTaken);
   }
 
   static saveTransactions(list: TransactionRecord[]): void {
@@ -532,23 +576,21 @@ export class StorageService {
       if (!id || seen.has(id)) return;
       seen.add(id);
       deduplicated.push(t);
-      if (t.booksBrought) this.registerUsedCodes(t.booksBrought);
-      if (t.booksTaken) this.registerUsedCodes(t.booksTaken);
     });
     localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(deduplicated));
   }
 
   /**
-   * Generates next batch of strictly unique, non-reusable U codes for kiosk visitor.
-   * Scans stored high-water mark, all historical codes, transactions, and active books.
+   * Generates next batch of strictly unique, sequential U codes (U1, U2, U3...) for kiosk visitor.
+   * Scans stored high-water mark, committed used codes, and live books list so codes never duplicate.
    */
-  static generateNextUCodes(count: number): string[] {
-    const usedSet = this.getUsedCodesSet();
+  static generateNextUCodes(count: number, currentBooks?: Book[]): string[] {
+    const usedSet = this.getUsedCodesSet(currentBooks);
     const storedCounter = parseInt(localStorage.getItem(STORAGE_KEYS.U_COUNTER) || '0', 10);
 
-    let maxU = storedCounter;
+    let maxU = isNaN(storedCounter) ? 0 : storedCounter;
     usedSet.forEach((code) => {
-      if (code.startsWith('U')) {
+      if (/^U\d+$/.test(code)) {
         const num = parseInt(code.substring(1), 10);
         if (!isNaN(num) && num > maxU) maxU = num;
       }

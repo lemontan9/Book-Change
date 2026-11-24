@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import type { Book, SystemSettings, TransactionRecord, StaffAccount } from './types';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import type { Book, SystemSettings, TransactionRecord } from './types';
 import { StorageService } from './services/storage';
 import { initAuth, logout, getAccessToken } from './services/firebaseAuth';
 import {
@@ -28,7 +28,6 @@ export default function App() {
   const [books, setBooks] = useState<Book[]>([]);
   const [settings, setSettings] = useState<SystemSettings>(StorageService.getSettings());
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
-  const [staff, setStaff] = useState<StaffAccount[]>([]);
 
   // Auth State
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(false);
@@ -38,6 +37,10 @@ export default function App() {
   // Google Workspace state
   const [googleUser, setGoogleUser] = useState<any | null>(null);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
+
+  // Track in-flight Sheet writes & unsynced local transactions to guarantee sequential non-duplicate U codes
+  const pendingSyncRef = useRef<Promise<void> | null>(null);
+  const hasUnsyncedLocalTransactionsRef = useRef<boolean>(false);
 
   const getActiveSpreadsheetId = useCallback(() => {
     const currentSettings = StorageService.getSettings();
@@ -52,6 +55,10 @@ export default function App() {
   // Authoritative Pull: fetches exact latest data from Google Sheet and updates system state & localStorage
   const pullFromGoogleSheet = useCallback(
     async (tokenOverride?: string | null): Promise<{ books: Book[]; transactions: TransactionRecord[] }> => {
+      if (pendingSyncRef.current) {
+        await pendingSyncRef.current.catch(() => {});
+      }
+
       const targetId = getActiveSpreadsheetId();
       const token =
         tokenOverride !== undefined
@@ -66,7 +73,8 @@ export default function App() {
 
       const sortedBooks = StorageService.sortBooks(fetchedBooks);
       StorageService.saveBooks(sortedBooks);
-      StorageService.registerUsedCodes(sortedBooks.map((b) => b.code));
+      StorageService.syncUsedCodesFromBooks(sortedBooks);
+      hasUnsyncedLocalTransactionsRef.current = false;
       setBooks(sortedBooks);
 
       StorageService.saveTransactions(fetchedTx);
@@ -84,6 +92,25 @@ export default function App() {
     },
     [googleToken, getActiveSpreadsheetId]
   );
+
+  // Pulls latest Books from Google Sheet before Kiosk Step 3 assigns U1, U2, U3... codes
+  const handleRefreshBooksBeforeKioskAssign = useCallback(async (): Promise<Book[]> => {
+    if (pendingSyncRef.current) {
+      await pendingSyncRef.current.catch(() => {});
+    }
+    // If previous Kiosk transactions haven't been synced to Google Sheet (e.g. offline/not logged in),
+    // preserve local U_COUNTER & books so the next visitor gets the next sequential U code without duplicates.
+    if (hasUnsyncedLocalTransactionsRef.current) {
+      return StorageService.getBooks();
+    }
+    try {
+      const res = await pullFromGoogleSheet();
+      return res.books;
+    } catch (err) {
+      console.warn('Pre-assign Google Sheet refresh non-fatal, keeping local books:', err);
+      return StorageService.getBooks();
+    }
+  }, [pullFromGoogleSheet]);
 
   const refreshFromGoogleSheet = useCallback(
     async (tokenOverride?: string | null) => {
@@ -170,7 +197,6 @@ export default function App() {
     setBooks(StorageService.getBooks());
     setSettings(StorageService.getSettings());
     setTransactions(StorageService.getTransactions());
-    setStaff(StorageService.getStaff());
 
     // Immediately pull live public Google Sheet so Kiosk Home counts match Dashboard & Sheet
     refreshFromGoogleSheet(null);
@@ -196,8 +222,13 @@ export default function App() {
     setBooks(updatedBooks);
     setTransactions(StorageService.getTransactions());
 
-    // Asynchronous background sync to Google Sheets & Google Drive if connected
-    syncTransactionToGoogleWorkspace(updatedBooks, newTransaction);
+    // Track asynchronous background sync to Google Sheets & Google Drive so subsequent pulls wait for it
+    const syncTask = syncTransactionToGoogleWorkspace(updatedBooks, newTransaction).finally(() => {
+      if (pendingSyncRef.current === syncTask) {
+        pendingSyncRef.current = null;
+      }
+    });
+    pendingSyncRef.current = syncTask;
   };
 
   const syncTransactionToGoogleWorkspace = async (
@@ -206,9 +237,12 @@ export default function App() {
   ) => {
     try {
       const token = googleToken || (await getAccessToken());
-      if (!token) return;
+      if (!token) {
+        hasUnsyncedLocalTransactionsRef.current = true;
+        return;
+      }
 
-      let spreadsheetId = settings.connectedSpreadsheetId;
+      let spreadsheetId = getActiveSpreadsheetId();
       let folderId = settings.connectedDriveFolderId;
 
       // Auto-provision Google Sheet and Drive folder if not yet created
@@ -253,9 +287,10 @@ export default function App() {
 
       // 3. Auto-sync ALL books (including new additions and matched status changes) to Google Sheets
       await syncAllBooksToSheet(token, spreadsheetId, allBooks);
+      hasUnsyncedLocalTransactionsRef.current = false;
 
       const finalSettings = {
-        ...settings,
+        ...StorageService.getSettings(),
         connectedSpreadsheetId: spreadsheetId,
         connectedDriveFolderId: folderId,
         lastSyncTime: new Date().toISOString(),
@@ -265,6 +300,7 @@ export default function App() {
       StorageService.saveBooks(allBooks);
       setBooks([...allBooks]);
     } catch (err) {
+      hasUnsyncedLocalTransactionsRef.current = true;
       console.error('Google Workspace auto-sync on match error:', err);
     }
   };
@@ -283,7 +319,7 @@ export default function App() {
       return;
     }
     setCurrentTab(tab);
-    if (tab === 'kiosk') {
+    if (tab === 'kiosk' && !hasUnsyncedLocalTransactionsRef.current) {
       refreshFromGoogleSheet();
     }
   };
@@ -319,6 +355,7 @@ export default function App() {
             books={books}
             onTransactionComplete={handleTransactionComplete}
             onOpenAdminLogin={() => setIsLoginModalOpen(true)}
+            onRefreshBooks={handleRefreshBooksBeforeKioskAssign}
           />
         )}
 
@@ -361,6 +398,8 @@ export default function App() {
             onSheetDataSynced={(freshBooks, freshTx, freshSettingsPatch) => {
               const sorted = StorageService.sortBooks(freshBooks);
               StorageService.saveBooks(sorted);
+              StorageService.syncUsedCodesFromBooks(sorted);
+              hasUnsyncedLocalTransactionsRef.current = false;
               StorageService.saveTransactions(freshTx);
               setBooks(sorted);
               setTransactions(freshTx);
@@ -380,10 +419,8 @@ export default function App() {
         {currentTab === 'settings' && (
           <AdminSettings
             settings={settings}
-            staff={staff}
             books={books}
             onUpdateSettings={(updated) => setSettings(updated)}
-            onUpdateStaff={(updated) => setStaff(updated)}
             googleConnected={Boolean(googleToken)}
             googleUser={googleUser}
             onConnectGoogle={() => setIsLoginModalOpen(true)}

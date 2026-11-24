@@ -49,12 +49,14 @@ interface KioskViewProps {
   books: Book[];
   onTransactionComplete: (newBooks: Book[], transaction: TransactionRecord) => void;
   onOpenAdminLogin?: () => void;
+  onRefreshBooks?: () => Promise<Book[]>;
 }
 
 export const KioskView: React.FC<KioskViewProps> = ({
   settings,
   books,
   onTransactionComplete,
+  onRefreshBooks,
 }) => {
   // Step 0: Welcome, 1: เงื่อนไข, 2: ลงทะเบียน, 3: หนังสือ, 4: ติดเลข, 5: จับคู่, 6: สิ้นสุด
   const [step, setStep] = useState<number>(0);
@@ -124,15 +126,51 @@ export const KioskView: React.FC<KioskViewProps> = ({
     }
   };
 
-  // Initialize book entries when entering step 3 or when book count changes
+  // Initialize book entries when entering step 3 and reconcile codes with freshest Google Sheet Books
   useEffect(() => {
-    if (step === 3 && bookEntries.length === 0) {
-      initBookEntries(bookCount);
+    if (step !== 3) return;
+    let cancelled = false;
+
+    if (bookEntries.length === 0) {
+      initBookEntries(bookCount, books);
     }
+
+    if (onRefreshBooks) {
+      onRefreshBooks()
+        .then((latestBooks) => {
+          if (cancelled) return;
+          setBookEntries((prev) => {
+            const count = prev.length || bookCount;
+            const freshCodes = StorageService.generateNextUCodes(count, latestBooks);
+            if (prev.length === 0) {
+              return freshCodes.map((code, i) => ({
+                tempId: `entry-${Date.now()}-${i}`,
+                code,
+                title: '',
+                isbn: '',
+                price: undefined,
+                category: '',
+                coverImage: undefined,
+                matchTargetCode: '',
+                isCancelled: false,
+              }));
+            }
+            return prev.map((entry, idx) => ({
+              ...entry,
+              code: freshCodes[idx] || entry.code,
+            }));
+          });
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      cancelled = true;
+    };
   }, [step]);
 
-  const initBookEntries = (count: number) => {
-    const codes = StorageService.generateNextUCodes(count);
+  const initBookEntries = (count: number, overrideBooks?: Book[]) => {
+    const codes = StorageService.generateNextUCodes(count, overrideBooks ?? books);
     const entries: KioskBookEntry[] = [];
     for (let i = 0; i < count; i++) {
       entries.push({
@@ -153,7 +191,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
   const handleUpdateBookCount = (newCount: number) => {
     if (newCount < 1 || newCount > 10) return;
     setBookCount(newCount);
-    const codes = StorageService.generateNextUCodes(newCount);
+    const codes = StorageService.generateNextUCodes(newCount, books);
     setBookEntries((prev) => {
       const updated: KioskBookEntry[] = [];
       for (let i = 0; i < newCount; i++) {
@@ -358,10 +396,33 @@ export const KioskView: React.FC<KioskViewProps> = ({
     if (!validateAllMatches()) return;
 
     const now = new Date().toISOString();
+    const currentBooks = StorageService.getBooks();
+    const existingCodeSet = new Set(
+      currentBooks.map((b) => (b.code || '').trim().toUpperCase()).filter(Boolean)
+    );
+    const allocatedInTx = new Set<string>();
+
+    // Final non-duplication safeguard: guarantee every assigned U code is unique against currentBooks & within this transaction
+    const resolveUniqueUCode = (preferredCode: string): string => {
+      const clean = (preferredCode || '').trim().toUpperCase();
+      if (clean && !existingCodeSet.has(clean) && !allocatedInTx.has(clean)) {
+        allocatedInTx.add(clean);
+        return clean;
+      }
+      const tempBooks: Book[] = [
+        ...currentBooks,
+        ...Array.from(allocatedInTx).map((c) => ({ code: c } as Book)),
+      ];
+      const nextCode = StorageService.generateNextUCodes(1, tempBooks)[0];
+      allocatedInTx.add(nextCode);
+      return nextCode;
+    };
+
     const booksToAdd: Book[] = [];
     const booksToUpdate: Book[] = [];
     const broughtCodes: string[] = [];
     const takenCodes: string[] = [];
+    const committedCodes: string[] = [];
     let donatedCount = 0;
     let cancelledCount = 0;
     let matchedCount = 0;
@@ -369,11 +430,14 @@ export const KioskView: React.FC<KioskViewProps> = ({
     const txId = `TX-${Date.now().toString().slice(-6)}`;
 
     bookEntries.forEach((entry) => {
+      const finalCode = resolveUniqueUCode(entry.code);
+      committedCodes.push(finalCode);
+
       if (entry.isCancelled) {
         cancelledCount++;
         booksToAdd.push({
-          id: `book-${Date.now()}-${entry.code}`,
-          code: entry.code,
+          id: `book-${Date.now()}-${finalCode}`,
+          code: finalCode,
           title: entry.title || 'ยกเลิกการแลก (Not Match)',
           isbn: entry.isbn,
           category: entry.category,
@@ -395,10 +459,10 @@ export const KioskView: React.FC<KioskViewProps> = ({
 
       if (isDonation) {
         donatedCount++;
-        broughtCodes.push(entry.code);
+        broughtCodes.push(finalCode);
         booksToAdd.push({
-          id: `book-${Date.now()}-${entry.code}`,
-          code: entry.code,
+          id: `book-${Date.now()}-${finalCode}`,
+          code: finalCode,
           title: entry.title || 'หนังสือบริจาค',
           isbn: entry.isbn,
           category: entry.category,
@@ -414,12 +478,12 @@ export const KioskView: React.FC<KioskViewProps> = ({
         });
       } else {
         matchedCount++;
-        broughtCodes.push(entry.code);
+        broughtCodes.push(finalCode);
         takenCodes.push(targetCode!);
 
         booksToAdd.push({
-          id: `book-${Date.now()}-${entry.code}`,
-          code: entry.code,
+          id: `book-${Date.now()}-${finalCode}`,
+          code: finalCode,
           title: entry.title,
           isbn: entry.isbn,
           category: entry.category,
@@ -440,7 +504,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
             ...shelfBook,
             status: 'Matched',
             matchedAt: now,
-            matchedWithCode: entry.code,
+            matchedWithCode: finalCode,
             matchedTransactionId: txId,
             exchangeCount: (shelfBook.exchangeCount || 1) + 1,
           });
@@ -448,7 +512,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
       }
     });
 
-    StorageService.commitUCodes(bookEntries.map((e) => e.code));
+    StorageService.commitUCodes(committedCodes);
 
     const totalBroughtCount = bookEntries.length;
 
@@ -466,12 +530,11 @@ export const KioskView: React.FC<KioskViewProps> = ({
       booksTakenCount: takenCodes.length,
     };
 
-    const currentBooks = StorageService.getBooks();
     const updatedBooks = currentBooks.map((b) => {
       const matchUpdate = booksToUpdate.find((u) => u.code === b.code);
       return matchUpdate || b;
     });
-    const finalBooks = [...booksToAdd, ...updatedBooks];
+    const finalBooks = StorageService.sortBooks([...booksToAdd, ...updatedBooks]);
 
     StorageService.saveBooks(finalBooks);
     StorageService.saveTransaction(transactionRecord);
@@ -904,7 +967,8 @@ export const KioskView: React.FC<KioskViewProps> = ({
             <button
               type="button"
               onClick={() => {
-                initBookEntries(1);
+                setBookCount(1);
+                setBookEntries([]);
                 setStep(1);
               }}
               className="w-full py-3.5 px-8 rounded-full bg-gradient-to-r from-[#875835] to-[#744829] hover:from-[#754B2B] hover:to-[#603A1F] active:scale-[0.99] text-white font-bold text-base sm:text-lg shadow-[0_10px_28px_rgba(116,72,41,0.25)] transition-all cursor-pointer flex items-center justify-center gap-3"
@@ -1252,9 +1316,6 @@ export const KioskView: React.FC<KioskViewProps> = ({
                 type="button"
                 onClick={() => {
                   if (validateParticipant()) {
-                    if (bookEntries.length === 0) {
-                      initBookEntries(bookCount);
-                    }
                     setStep(3);
                   }
                 }}

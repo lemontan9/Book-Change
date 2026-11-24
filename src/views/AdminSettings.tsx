@@ -22,7 +22,7 @@ import {
   Delete,
   BookOpen,
 } from 'lucide-react';
-import type { SystemSettings, StaffAccount, Book } from '../types';
+import type { SystemSettings, Book } from '../types';
 import { StorageService } from '../services/storage';
 import {
   createBookSwapSpreadsheet,
@@ -37,10 +37,8 @@ const SETTINGS_ACCESS_PIN = '44512';
 
 interface AdminSettingsProps {
   settings: SystemSettings;
-  staff: StaffAccount[];
   books: Book[];
   onUpdateSettings: (s: SystemSettings) => void;
-  onUpdateStaff: (st: StaffAccount[]) => void;
   googleConnected: boolean;
   googleUser?: any;
   onConnectGoogle: () => void;
@@ -50,10 +48,8 @@ interface AdminSettingsProps {
 
 export const AdminSettings: React.FC<AdminSettingsProps> = ({
   settings,
-  staff,
   books,
   onUpdateSettings,
-  onUpdateStaff,
   googleConnected,
   googleUser,
   onConnectGoogle,
@@ -141,10 +137,6 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
   const [exchangeTerms, setExchangeTerms] = useState(settings.exchangeTerms);
   const [showWelcomeShelf, setShowWelcomeShelf] = useState(settings.showWelcomeShelf);
   const [deadStockDays, setDeadStockDays] = useState(settings.deadStockThresholdDays);
-
-  const [staffList, setStaffList] = useState<StaffAccount[]>(staff);
-  const [newStaffUser, setNewStaffUser] = useState('');
-  const [newStaffPassword, setNewStaffPassword] = useState('');
 
   const [spreadsheetIdInput, setSpreadsheetIdInput] = useState(
     settings.connectedSpreadsheetId || ''
@@ -249,46 +241,6 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
     const nextOptions = frequencyOptions.filter((o) => o !== optToRemove);
     setFrequencyOptions(nextOptions);
     persistLocalSettings({ visitFrequencyOptions: nextOptions });
-  };
-
-  const handleAddStaff = (e: React.FormEvent) => {
-    e.preventDefault();
-    const user = newStaffUser.trim();
-    const pwd = newStaffPassword.trim();
-    if (!user || !pwd) {
-      setSyncStatusMsg({ type: 'error', text: 'กรุณากรอก Username และ Password' });
-      return;
-    }
-    if (staffList.some((s) => s.username === user)) {
-      setSyncStatusMsg({ type: 'error', text: 'มีชื่อผู้ใช้นี้ในระบบแล้ว' });
-      return;
-    }
-
-    const nextStaff: StaffAccount[] = [
-      ...staffList,
-      {
-        username: user,
-        password: pwd,
-        role: 'staff',
-        createdAt: new Date().toISOString(),
-      },
-    ];
-    setStaffList(nextStaff);
-    StorageService.saveStaff(nextStaff);
-    onUpdateStaff(nextStaff);
-    setNewStaffUser('');
-    setNewStaffPassword('');
-  };
-
-  const handleRemoveStaff = (username: string) => {
-    if (username === 'admin') {
-      setSyncStatusMsg({ type: 'error', text: 'ไม่สามารถลบบัญชี admin หลักได้' });
-      return;
-    }
-    const nextStaff = staffList.filter((s) => s.username !== username);
-    setStaffList(nextStaff);
-    StorageService.saveStaff(nextStaff);
-    onUpdateStaff(nextStaff);
   };
 
   const handleSaveSettings = async () => {
@@ -769,6 +721,24 @@ export const AdminSettings: React.FC<AdminSettingsProps> = ({
         </div>
       ) : (
         <div className="space-y-4">
+          {!isGoogleAuthorized && (
+            <div className="p-3.5 rounded-2xl text-xs bg-[#FBF3DF] border border-[#E8D09B] text-[#6B471C] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 shadow-xs">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-[#9E6F38] mt-0.5" />
+                <span className="leading-relaxed">
+                  <strong className="text-[#5C3A21]">ยังไม่ได้เชื่อมต่อ Google Mail:</strong> การแก้ไขในหน้านี้จะบันทึกเฉพาะในเบราว์เซอร์เครื่องนี้เท่านั้น หากต้องการให้ข้อมูลตรงกันบนหน้าใช้งานจริงและทุกเครื่อง กรุณาลงชื่อเข้าใช้ด้วย Google Mail แล้วกดปุ่ม <strong>บันทึกข้อมูล</strong> หรือ <strong>ซิงค์ไป Google Sheet</strong>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={onConnectGoogle}
+                className="shrink-0 px-3.5 py-1.5 rounded-full bg-[#7D502E] hover:bg-[#653F22] text-white font-semibold text-xs transition-colors cursor-pointer whitespace-nowrap"
+              >
+                เชื่อมต่อ Google Mail
+              </button>
+            </div>
+          )}
+
           {syncStatusMsg && (
             <div
               className={`p-3 rounded-2xl text-xs flex items-center gap-2 shadow-xs ${
