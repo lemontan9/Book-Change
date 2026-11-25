@@ -214,7 +214,9 @@ export async function appendTransactionToSheet(
   ];
 
   const res = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A:K:append?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+      spreadsheetId
+    )}/values/Transactions!A:K:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
     {
       method: 'POST',
       headers: {
@@ -223,6 +225,75 @@ export async function appendTransactionToSheet(
       },
       body: JSON.stringify({
         values: [row],
+      }),
+    }
+  );
+
+  await assertSheetResponse(res, 'บันทึกธุรกรรมในแท็บ Transactions');
+}
+
+export async function appendTransactionsToSheet(
+  accessToken: string,
+  spreadsheetId: string,
+  transactions: TransactionRecord[],
+  ensureHeader = false
+): Promise<void> {
+  if (transactions.length === 0) return;
+
+  if (ensureHeader) {
+    const txHeaderRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+        spreadsheetId
+      )}/values/Transactions!A1:K1?valueInputOption=USER_ENTERED`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          values: [TRANSACTION_HEADERS],
+        }),
+      }
+    );
+    await assertSheetResponse(txHeaderRes, 'อัปเดตหัวตาราง Transactions');
+  }
+
+  const rows = transactions.map((t) => {
+    const totalBrought =
+      t.totalBroughtCount !== undefined
+        ? t.totalBroughtCount
+        : t.booksBroughtCount ?? t.booksBrought.length + (t.cancelledCount || 0);
+    const matched =
+      t.matchedCount !== undefined ? t.matchedCount : t.booksTakenCount ?? t.booksTaken.length;
+
+    return [
+      t.id,
+      t.timestamp,
+      t.participant.participationHistory || '-',
+      t.participant.visitFrequencyThisYear || '-',
+      t.participant.memberType,
+      totalBrought,
+      matched,
+      t.donatedCount,
+      t.cancelledCount,
+      t.booksBrought.join(', '),
+      t.booksTaken.join(', '),
+    ];
+  });
+
+  const res = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+      spreadsheetId
+    )}/values/Transactions!A:K:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        values: rows,
       }),
     }
   );
@@ -409,7 +480,8 @@ function getColumnIndexMap(headerRow: string[] | undefined, defaultHeaders: stri
 
 export async function fetchBooksFromSheet(
   accessToken: string | null | undefined,
-  spreadsheetId: string
+  spreadsheetId: string,
+  strictAuth = false
 ): Promise<Book[]> {
   let rows: any[][] = [];
   let headerRow: string[] | undefined;
@@ -419,7 +491,9 @@ export async function fetchBooksFromSheet(
   if (accessToken) {
     try {
       const res = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:Z5000`,
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+          spreadsheetId
+        )}/values/Books!A1:Z5000`,
         {
           cache: 'no-store',
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -433,8 +507,11 @@ export async function fetchBooksFromSheet(
           headerRow = allValues[0];
           rows = allValues.slice(1);
         }
+      } else if (strictAuth && (res.status === 401 || res.status === 403)) {
+        await assertSheetResponse(res, 'อ่านข้อมูลหนังสือจากแท็บ Books');
       }
     } catch (e) {
+      if (e instanceof SheetApiError) throw e;
       console.warn('Authenticated Sheets API v4 fetch non-fatal, falling back to public link fetch:', e);
     }
   }
@@ -503,7 +580,8 @@ export async function fetchBooksFromSheet(
 
 export async function fetchTransactionsFromSheet(
   accessToken: string | null | undefined,
-  spreadsheetId: string
+  spreadsheetId: string,
+  strictAuth = false
 ): Promise<TransactionRecord[]> {
   let rows: any[][] = [];
   let headerRow: string[] | undefined;
@@ -513,7 +591,9 @@ export async function fetchTransactionsFromSheet(
   if (accessToken) {
     try {
       const res = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A1:K2000`,
+        `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+          spreadsheetId
+        )}/values/Transactions!A1:K5000`,
         {
           cache: 'no-store',
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -527,8 +607,11 @@ export async function fetchTransactionsFromSheet(
           headerRow = allValues[0];
           rows = allValues.slice(1);
         }
+      } else if (strictAuth && (res.status === 401 || res.status === 403)) {
+        await assertSheetResponse(res, 'อ่านข้อมูลธุรกรรมจากแท็บ Transactions');
       }
     } catch (e) {
+      if (e instanceof SheetApiError) throw e;
       console.warn('Authenticated Sheets API v4 transaction fetch non-fatal:', e);
     }
   }
@@ -603,12 +686,29 @@ export async function syncAllBooksToSheet(
   spreadsheetId: string,
   books: Book[]
 ): Promise<void> {
-  // Clear and rewrite books tab header (A1:P1, 16 columns)
-  await writeHeaders(accessToken, spreadsheetId);
+  // Ensure Books tab header (A1:P1, 16 columns) without touching Transactions tab
+  const booksHeaderRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+      spreadsheetId
+    )}/values/Books!A1:P1?valueInputOption=USER_ENTERED`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        values: [BOOK_HEADERS],
+      }),
+    }
+  );
+  await assertSheetResponse(booksHeaderRes, 'อัปเดตหัวตาราง Books');
 
   // Clear existing rows in Books tab to prevent leftover ghost columns from previous versions
   const clearRes = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:Z5000:clear`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(
+      spreadsheetId
+    )}/values/Books!A2:Z5000:clear`,
     {
       method: 'POST',
       headers: {

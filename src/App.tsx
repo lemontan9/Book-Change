@@ -12,6 +12,7 @@ import {
 import {
   SheetApiError,
   appendBookToSheet,
+  appendTransactionsToSheet,
   syncAllBooksToSheet,
   syncAllTransactionsToSheet,
   createBookSwapSpreadsheet,
@@ -57,6 +58,8 @@ export default function App() {
 
   // Track in-flight Sheet writes so subsequent pulls always wait for writes to complete first
   const pendingSyncRef = useRef<Promise<any> | null>(null);
+  // Keep user on Kiosk screen when they sign in with Google Mail from Kiosk/Sync Banner
+  const stayOnKioskAfterLoginRef = useRef<boolean>(false);
 
   const getActiveSpreadsheetId = useCallback(() => {
     const currentSettings = StorageService.getSettings();
@@ -102,9 +105,17 @@ export default function App() {
         let spreadsheetId = getActiveSpreadsheetId();
         let folderId = StorageService.getSettings().connectedDriveFolderId;
 
+        const currentQueue = StorageService.getPendingSyncQueue();
+        const pendingCountBefore = StorageService.getPendingSyncCount();
+        const needsDriveUpload = currentQueue.addedBooks.some(
+          (b) => b.coverImage && b.coverImage.startsWith('data:image') && !b.driveFileId
+        );
+
         if (!spreadsheetId) {
           spreadsheetId = await createBookSwapSpreadsheet(token);
-          folderId = await getOrCreateBookCoversFolder(token);
+          if (needsDriveUpload) {
+            folderId = await getOrCreateBookCoversFolder(token);
+          }
           const updated = {
             ...StorageService.getSettings(),
             connectedSpreadsheetId: spreadsheetId,
@@ -112,7 +123,7 @@ export default function App() {
           };
           StorageService.saveSettings(updated);
           setSettings(updated);
-        } else if (!folderId) {
+        } else if (needsDriveUpload && !folderId) {
           try {
             folderId = await getOrCreateBookCoversFolder(token);
             const updated = { ...StorageService.getSettings(), connectedDriveFolderId: folderId };
@@ -123,10 +134,8 @@ export default function App() {
           }
         }
 
-        // 1. Upload any pending cover images to Google Drive (non-fatal)
-        const currentQueue = StorageService.getPendingSyncQueue();
-        const pendingCountBefore = StorageService.getPendingSyncCount();
-        if (folderId) {
+        // 1. Upload any pending cover images to Google Drive ONLY when present (non-fatal)
+        if (needsDriveUpload && folderId) {
           let queueModified = false;
           for (const b of currentQueue.addedBooks) {
             if (b.coverImage && b.coverImage.startsWith('data:image') && !b.driveFileId) {
@@ -149,18 +158,38 @@ export default function App() {
           }
         }
 
-        // 2. Fetch latest remote Books & Transactions first so Merge-Before-Write never overwrites other devices
+        // 2. Fetch latest remote Books & Transactions first (strictAuth=true fails fast on expired 401/403 token)
         const [remoteBooks, remoteTx] = await Promise.all([
-          fetchBooksFromSheet(token, spreadsheetId),
-          fetchTransactionsFromSheet(token, spreadsheetId).catch(() => []),
+          fetchBooksFromSheet(token, spreadsheetId, true),
+          fetchTransactionsFromSheet(token, spreadsheetId, true),
         ]);
 
         const mergedBooks = StorageService.mergeRemoteBooksWithPending(remoteBooks);
         const mergedTx = StorageService.mergeRemoteTransactionsWithPending(remoteTx);
 
-        // 3. Write BOTH Books AND Transactions strictly (throws SheetApiError on 401/403/5xx)
-        await syncAllBooksToSheet(token, spreadsheetId, mergedBooks);
-        await syncAllTransactionsToSheet(token, spreadsheetId, mergedTx);
+        // Append ONLY new unsynced transactions directly into Transactions tab (gid=104373978)
+        // using INSERT_ROWS so existing rows are NEVER cleared or overwritten
+        const remoteTxIdSet = new Set(remoteTx.map((t) => (t.id || '').trim()).filter(Boolean));
+        const newTransactionsToAppend = currentQueue.transactions.filter(
+          (t) => t?.id && !remoteTxIdSet.has(t.id.trim())
+        );
+
+        // 3. Write BOTH Transactions AND Books immediately in parallel (throws SheetApiError on 401/403/5xx)
+        const writePromises: Promise<void>[] = [];
+        if (newTransactionsToAppend.length > 0) {
+          writePromises.push(
+            appendTransactionsToSheet(
+              token,
+              spreadsheetId,
+              newTransactionsToAppend,
+              remoteTx.length === 0
+            )
+          );
+        }
+        if (currentQueue.addedBooks.length > 0 || currentQueue.updatedBooks.length > 0) {
+          writePromises.push(syncAllBooksToSheet(token, spreadsheetId, mergedBooks));
+        }
+        await Promise.all(writePromises);
 
         // 4. ONLY clear pending queue after BOTH Google Sheet tabs confirm HTTP 200 OK
         StorageService.clearPendingSyncQueue();
@@ -269,7 +298,7 @@ export default function App() {
     [googleToken, getActiveSpreadsheetId]
   );
 
-  // Pulls latest Books from Google Sheet before Kiosk Step 3 assigns U1, U2, U3... codes
+  // Pulls latest Books from Google Sheet for Kiosk Step 3 (U-code assignment) and Step 5 (live Match search)
   const handleRefreshBooksBeforeKioskAssign = useCallback(async (): Promise<Book[]> => {
     if (pendingSyncRef.current) {
       await pendingSyncRef.current.catch(() => {});
@@ -279,16 +308,14 @@ export default function App() {
       const liveToken = googleToken || (await getAccessToken().catch(() => null));
       if (liveToken) {
         await flushPendingSyncToGoogleSheet(liveToken);
-      } else {
-        // Keep local books + pending queue so U codes continue sequentially without duplicates
-        return StorageService.getBooks();
       }
     }
+    // Always pull live Google Sheet Books (pullFromGoogleSheet safely merges any pending local items)
     try {
       const res = await pullFromGoogleSheet();
       return res.books;
     } catch (err) {
-      console.warn('Pre-assign Google Sheet refresh non-fatal, keeping local books:', err);
+      console.warn('Live Kiosk Google Sheet refresh non-fatal, keeping local books:', err);
       return StorageService.getBooks();
     }
   }, [googleToken, flushPendingSyncToGoogleSheet, pullFromGoogleSheet]);
@@ -421,13 +448,13 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [googleToken]);
 
-  // Handle transaction from Kiosk: enqueue persistently FIRST, then flush to Google Sheet immediately
+  // Handle transaction from Kiosk: enqueue persistently FIRST, then flush to Google Sheet immediately and await result
   const handleTransactionComplete = async (
     updatedBooks: Book[],
     newTransaction: TransactionRecord,
     addedBooks?: Book[],
     matchedUpdates?: Book[]
-  ) => {
+  ): Promise<{ synced: boolean; count: number; reason?: 'no_auth' | 'error'; error?: string }> => {
     const txAdded =
       addedBooks && addedBooks.length > 0
         ? addedBooks
@@ -452,13 +479,20 @@ export default function App() {
     setBooks(updatedBooks);
     setTransactions(StorageService.getTransactions());
 
-    // Track flush promise so subsequent Step 3 pulls wait for this write to finish
-    const syncTask = flushPendingSyncToGoogleSheet().finally(() => {
+    // Serialize flushes so concurrent transactions never race or duplicate rows in Transactions
+    const previousFlush = pendingSyncRef.current;
+    const syncTask = (async () => {
+      if (previousFlush) {
+        await previousFlush.catch(() => {});
+      }
+      return flushPendingSyncToGoogleSheet();
+    })().finally(() => {
       if (pendingSyncRef.current === syncTask) {
         pendingSyncRef.current = null;
       }
     });
     pendingSyncRef.current = syncTask;
+    return await syncTask;
   };
 
   const handleAdminLogout = async () => {
@@ -543,6 +577,7 @@ export default function App() {
                     if (googleToken) {
                       flushPendingSyncToGoogleSheet();
                     } else {
+                      stayOnKioskAfterLoginRef.current = currentTab === 'kiosk';
                       setIsLoginModalOpen(true);
                     }
                   }}
@@ -565,7 +600,10 @@ export default function App() {
               {!googleToken && pendingSyncCount === 0 && syncBanner?.type !== 'success' && (
                 <button
                   type="button"
-                  onClick={() => setIsLoginModalOpen(true)}
+                  onClick={() => {
+                    stayOnKioskAfterLoginRef.current = currentTab === 'kiosk';
+                    setIsLoginModalOpen(true);
+                  }}
                   className="inline-flex items-center gap-1.5 bg-[#7D502E] hover:bg-[#653F22] text-white px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <span>ลงชื่อเข้าใช้ Google Mail</span>
@@ -593,8 +631,15 @@ export default function App() {
             settings={settings}
             books={books}
             onTransactionComplete={handleTransactionComplete}
-            onOpenAdminLogin={() => setIsLoginModalOpen(true)}
+            onOpenAdminLogin={() => {
+              stayOnKioskAfterLoginRef.current = true;
+              setIsLoginModalOpen(true);
+            }}
             onRefreshBooks={handleRefreshBooksBeforeKioskAssign}
+            googleConnected={Boolean(googleToken)}
+            pendingSyncCount={pendingSyncCount}
+            isSyncingPending={isFlushingPending}
+            onRetrySync={() => flushPendingSyncToGoogleSheet()}
           />
         )}
 
@@ -683,11 +728,18 @@ export default function App() {
       {/* Admin Login Modal */}
       <AdminLogin
         isOpen={isLoginModalOpen}
-        onClose={() => setIsLoginModalOpen(false)}
+        onClose={() => {
+          stayOnKioskAfterLoginRef.current = false;
+          setIsLoginModalOpen(false);
+        }}
         onLoginSuccess={async (user) => {
           setIsAdminLoggedIn(true);
           setAdminUsername(user);
-          setCurrentTab((prev) => (prev === 'kiosk' ? 'dashboard' : prev));
+          const shouldStayOnKiosk = stayOnKioskAfterLoginRef.current;
+          stayOnKioskAfterLoginRef.current = false;
+          if (!shouldStayOnKiosk) {
+            setCurrentTab((prev) => (prev === 'kiosk' ? 'dashboard' : prev));
+          }
         }}
         onGoogleConnected={async (user, token) => {
           setGoogleUser(user);

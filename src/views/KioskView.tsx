@@ -18,6 +18,8 @@ import {
   Package,
   Heart,
   ClipboardList,
+  RefreshCw,
+  UploadCloud,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import type { Book, SystemSettings, ParticipantInfo, KioskBookEntry, TransactionRecord } from '../types';
@@ -44,6 +46,13 @@ import {
   Step6RightHeartMascotIllustration,
 } from '../components/EcoIllustrations';
 
+interface KioskSyncResult {
+  synced: boolean;
+  count?: number;
+  reason?: 'no_auth' | 'error';
+  error?: string;
+}
+
 interface KioskViewProps {
   settings: SystemSettings;
   books: Book[];
@@ -52,16 +61,25 @@ interface KioskViewProps {
     transaction: TransactionRecord,
     addedBooks?: Book[],
     updatedBooks?: Book[]
-  ) => void;
+  ) => Promise<KioskSyncResult> | void;
   onOpenAdminLogin?: () => void;
   onRefreshBooks?: () => Promise<Book[]>;
+  googleConnected?: boolean;
+  pendingSyncCount?: number;
+  isSyncingPending?: boolean;
+  onRetrySync?: () => Promise<KioskSyncResult>;
 }
 
 export const KioskView: React.FC<KioskViewProps> = ({
   settings,
   books,
   onTransactionComplete,
+  onOpenAdminLogin,
   onRefreshBooks,
+  googleConnected = false,
+  pendingSyncCount = 0,
+  isSyncingPending = false,
+  onRetrySync,
 }) => {
   // Step 0: Welcome, 1: เงื่อนไข, 2: ลงทะเบียน, 3: หนังสือ, 4: ติดเลข, 5: จับคู่, 6: สิ้นสุด
   const [step, setStep] = useState<number>(0);
@@ -93,11 +111,16 @@ export const KioskView: React.FC<KioskViewProps> = ({
   const [shelfSearchQuery, setShelfSearchQuery] = useState('');
   const [isBrowsingShelfForIdx, setIsBrowsingShelfForIdx] = useState<number | null>(null);
 
+  // Step 5 live Google Sheet refresh & Step 5->6 submit state
+  const [isRefreshingStep5Books, setIsRefreshingStep5Books] = useState(false);
+  const [isSubmittingExchange, setIsSubmittingExchange] = useState(false);
+
   // Completed transaction data
   const [completedTransaction, setCompletedTransaction] = useState<{
     transaction: TransactionRecord;
     userBooks: Book[];
     takenBooks: Book[];
+    syncResult?: KioskSyncResult;
   } | null>(null);
 
   // Home Welcome Shelf controls (Side-scrolling & criteria)
@@ -173,6 +196,40 @@ export const KioskView: React.FC<KioskViewProps> = ({
       cancelled = true;
     };
   }, [step]);
+
+  // Helper to pull freshest live books from Google Sheet for Step 5 matching & shelf search
+  const refreshStep5LiveBooks = React.useCallback(async () => {
+    if (!onRefreshBooks) return;
+    setIsRefreshingStep5Books(true);
+    try {
+      await onRefreshBooks();
+    } catch {
+      // Non-fatal; fall back to current books
+    } finally {
+      setIsRefreshingStep5Books(false);
+    }
+  }, [onRefreshBooks]);
+
+  // Pull latest live books from Google Sheet immediately whenever entering Step 5
+  useEffect(() => {
+    if (step !== 5) return;
+    refreshStep5LiveBooks();
+  }, [step, refreshStep5LiveBooks]);
+
+  // If user connects Google Mail while on Step 6 and pending queue clears, reflect synced status immediately
+  useEffect(() => {
+    if (step === 6 && completedTransaction && !completedTransaction.syncResult?.synced && pendingSyncCount === 0 && googleConnected) {
+      setCompletedTransaction((prev) =>
+        prev ? { ...prev, syncResult: { synced: true } } : prev
+      );
+    }
+  }, [step, completedTransaction, pendingSyncCount, googleConnected]);
+
+  const handleOpenShelfBrowser = (idx: number) => {
+    setShelfSearchQuery('');
+    setIsBrowsingShelfForIdx(idx);
+    refreshStep5LiveBooks();
+  };
 
   const initBookEntries = (count: number, overrideBooks?: Book[]) => {
     const codes = StorageService.generateNextUCodes(count, overrideBooks ?? books);
@@ -397,168 +454,184 @@ export const KioskView: React.FC<KioskViewProps> = ({
     return Object.keys(errors).length === 0;
   };
 
-  const handleConfirmExchange = () => {
+  const handleConfirmExchange = async () => {
+    if (isSubmittingExchange) return;
     if (!validateAllMatches()) return;
 
-    const now = new Date().toISOString();
-    const currentBooks = StorageService.getBooks();
-    const existingCodeSet = new Set(
-      currentBooks.map((b) => (b.code || '').trim().toUpperCase()).filter(Boolean)
-    );
-    const allocatedInTx = new Set<string>();
+    setIsSubmittingExchange(true);
+    try {
+      const now = new Date().toISOString();
+      const currentBooks = StorageService.getBooks();
+      const existingCodeSet = new Set(
+        currentBooks.map((b) => (b.code || '').trim().toUpperCase()).filter(Boolean)
+      );
+      const allocatedInTx = new Set<string>();
 
-    // Final non-duplication safeguard: guarantee every assigned U code is unique against currentBooks & within this transaction
-    const resolveUniqueUCode = (preferredCode: string): string => {
-      const clean = (preferredCode || '').trim().toUpperCase();
-      if (clean && !existingCodeSet.has(clean) && !allocatedInTx.has(clean)) {
-        allocatedInTx.add(clean);
-        return clean;
-      }
-      const tempBooks: Book[] = [
-        ...currentBooks,
-        ...Array.from(allocatedInTx).map((c) => ({ code: c } as Book)),
-      ];
-      const nextCode = StorageService.generateNextUCodes(1, tempBooks)[0];
-      allocatedInTx.add(nextCode);
-      return nextCode;
-    };
-
-    const booksToAdd: Book[] = [];
-    const booksToUpdate: Book[] = [];
-    const broughtCodes: string[] = [];
-    const takenCodes: string[] = [];
-    const committedCodes: string[] = [];
-    let donatedCount = 0;
-    let cancelledCount = 0;
-    let matchedCount = 0;
-
-    const txId = `TX-${Date.now().toString().slice(-6)}`;
-
-    bookEntries.forEach((entry) => {
-      const finalCode = resolveUniqueUCode(entry.code);
-      committedCodes.push(finalCode);
-
-      if (entry.isCancelled) {
-        cancelledCount++;
-        booksToAdd.push({
-          id: `book-${Date.now()}-${finalCode}`,
-          code: finalCode,
-          title: entry.title || 'ยกเลิกการแลก (Not Match)',
-          isbn: entry.isbn,
-          category: entry.category,
-          price: entry.price ?? 0,
-          status: 'Not Match',
-          source: 'User',
-          transactionId: txId,
-          matchedTransactionId: '',
-          memberType: participant.memberType,
-          coverImage: entry.coverImage,
-          createdAt: now,
-          exchangeCount: 0,
-        });
-        return;
-      }
-
-      const targetCode = entry.matchTargetCode?.trim().toUpperCase();
-      const isDonation = targetCode === 'DONATION';
-
-      if (isDonation) {
-        donatedCount++;
-        broughtCodes.push(finalCode);
-        booksToAdd.push({
-          id: `book-${Date.now()}-${finalCode}`,
-          code: finalCode,
-          title: entry.title || 'หนังสือบริจาค',
-          isbn: entry.isbn,
-          category: entry.category,
-          price: entry.price ?? 0,
-          status: 'Available',
-          source: 'Library',
-          transactionId: txId,
-          matchedTransactionId: '',
-          memberType: participant.memberType,
-          coverImage: entry.coverImage,
-          createdAt: now,
-          exchangeCount: 1,
-        });
-      } else {
-        matchedCount++;
-        broughtCodes.push(finalCode);
-        takenCodes.push(targetCode!);
-
-        booksToAdd.push({
-          id: `book-${Date.now()}-${finalCode}`,
-          code: finalCode,
-          title: entry.title,
-          isbn: entry.isbn,
-          category: entry.category,
-          price: entry.price ?? 0,
-          status: 'Available',
-          source: 'User',
-          transactionId: txId,
-          matchedTransactionId: txId,
-          memberType: participant.memberType,
-          coverImage: entry.coverImage,
-          createdAt: now,
-          exchangeCount: 1,
-        });
-
-        const shelfBook = books.find((b) => b.code.toUpperCase() === targetCode);
-        if (shelfBook) {
-          booksToUpdate.push({
-            ...shelfBook,
-            status: 'Matched',
-            matchedAt: now,
-            matchedWithCode: finalCode,
-            matchedTransactionId: txId,
-            exchangeCount: (shelfBook.exchangeCount || 1) + 1,
-          });
+      // Final non-duplication safeguard: guarantee every assigned U code is unique against currentBooks & within this transaction
+      const resolveUniqueUCode = (preferredCode: string): string => {
+        const clean = (preferredCode || '').trim().toUpperCase();
+        if (clean && !existingCodeSet.has(clean) && !allocatedInTx.has(clean)) {
+          allocatedInTx.add(clean);
+          return clean;
         }
-      }
-    });
+        const tempBooks: Book[] = [
+          ...currentBooks,
+          ...Array.from(allocatedInTx).map((c) => ({ code: c } as Book)),
+        ];
+        const nextCode = StorageService.generateNextUCodes(1, tempBooks)[0];
+        allocatedInTx.add(nextCode);
+        return nextCode;
+      };
 
-    StorageService.commitUCodes(committedCodes);
+      const booksToAdd: Book[] = [];
+      const booksToUpdate: Book[] = [];
+      const broughtCodes: string[] = [];
+      const takenCodes: string[] = [];
+      const committedCodes: string[] = [];
+      const resolvedEntries: KioskBookEntry[] = [];
+      let donatedCount = 0;
+      let cancelledCount = 0;
+      let matchedCount = 0;
 
-    const totalBroughtCount = bookEntries.length;
+      const txId = `TX-${Date.now().toString().slice(-6)}`;
 
-    const transactionRecord: TransactionRecord = {
-      id: txId,
-      timestamp: now,
-      participant,
-      totalBroughtCount,
-      matchedCount,
-      donatedCount,
-      cancelledCount,
-      booksBrought: broughtCodes,
-      booksTaken: takenCodes,
-      booksBroughtCount: totalBroughtCount,
-      booksTakenCount: takenCodes.length,
-    };
+      bookEntries.forEach((entry) => {
+        const finalCode = resolveUniqueUCode(entry.code);
+        committedCodes.push(finalCode);
+        resolvedEntries.push({ ...entry, code: finalCode });
 
-    const updatedBooks = currentBooks.map((b) => {
-      const matchUpdate = booksToUpdate.find((u) => u.code === b.code);
-      return matchUpdate || b;
-    });
-    const finalBooks = StorageService.sortBooks([...booksToAdd, ...updatedBooks]);
+        if (entry.isCancelled) {
+          cancelledCount++;
+          booksToAdd.push({
+            id: `book-${Date.now()}-${finalCode}`,
+            code: finalCode,
+            title: entry.title || 'ยกเลิกการแลก (Not Match)',
+            isbn: entry.isbn,
+            category: entry.category,
+            price: entry.price ?? 0,
+            status: 'Not Match',
+            source: 'User',
+            transactionId: txId,
+            matchedTransactionId: '',
+            memberType: participant.memberType,
+            coverImage: entry.coverImage,
+            createdAt: now,
+            exchangeCount: 0,
+          });
+          return;
+        }
 
-    StorageService.saveBooks(finalBooks);
-    StorageService.saveTransaction(transactionRecord);
+        const targetCode = entry.matchTargetCode?.trim().toUpperCase();
+        const isDonation = targetCode === 'DONATION';
 
-    onTransactionComplete(finalBooks, transactionRecord, booksToAdd, booksToUpdate);
+        if (isDonation) {
+          donatedCount++;
+          broughtCodes.push(finalCode);
+          booksToAdd.push({
+            id: `book-${Date.now()}-${finalCode}`,
+            code: finalCode,
+            title: entry.title || 'หนังสือบริจาค',
+            isbn: entry.isbn,
+            category: entry.category,
+            price: entry.price ?? 0,
+            status: 'Available',
+            source: 'Library',
+            transactionId: txId,
+            matchedTransactionId: '',
+            memberType: participant.memberType,
+            coverImage: entry.coverImage,
+            createdAt: now,
+            exchangeCount: 1,
+          });
+        } else {
+          matchedCount++;
+          broughtCodes.push(finalCode);
+          takenCodes.push(targetCode!);
 
-    setCompletedTransaction({
-      transaction: transactionRecord,
-      userBooks: booksToAdd.filter((b) => b.status !== 'Not Match'),
-      takenBooks: booksToUpdate,
-    });
+          booksToAdd.push({
+            id: `book-${Date.now()}-${finalCode}`,
+            code: finalCode,
+            title: entry.title,
+            isbn: entry.isbn,
+            category: entry.category,
+            price: entry.price ?? 0,
+            status: 'Available',
+            source: 'User',
+            transactionId: txId,
+            matchedTransactionId: txId,
+            memberType: participant.memberType,
+            coverImage: entry.coverImage,
+            createdAt: now,
+            exchangeCount: 1,
+          });
 
-    setStep(6);
-    confetti({
-      particleCount: 80,
-      spread: 70,
-      origin: { y: 0.6 },
-      colors: ['#7D502E', '#4B5E26', '#6A8852', '#E5A93B'],
-    });
+          const shelfBook =
+            currentBooks.find((b) => (b.code || '').trim().toUpperCase() === targetCode) ||
+            books.find((b) => (b.code || '').trim().toUpperCase() === targetCode);
+          if (shelfBook) {
+            booksToUpdate.push({
+              ...shelfBook,
+              status: 'Matched',
+              matchedAt: now,
+              matchedWithCode: finalCode,
+              matchedTransactionId: txId,
+              exchangeCount: (shelfBook.exchangeCount || 1) + 1,
+            });
+          }
+        }
+      });
+
+      setBookEntries(resolvedEntries);
+      StorageService.commitUCodes(committedCodes);
+
+      const totalBroughtCount = resolvedEntries.length;
+
+      const transactionRecord: TransactionRecord = {
+        id: txId,
+        timestamp: now,
+        participant,
+        totalBroughtCount,
+        matchedCount,
+        donatedCount,
+        cancelledCount,
+        booksBrought: broughtCodes,
+        booksTaken: takenCodes,
+        booksBroughtCount: totalBroughtCount,
+        booksTakenCount: takenCodes.length,
+      };
+
+      const updatedBooks = currentBooks.map((b) => {
+        const bCode = (b.code || '').trim().toUpperCase();
+        const matchUpdate = booksToUpdate.find((u) => (u.code || '').trim().toUpperCase() === bCode);
+        return matchUpdate || b;
+      });
+      const finalBooks = StorageService.sortBooks([...booksToAdd, ...updatedBooks]);
+
+      StorageService.saveBooks(finalBooks);
+      StorageService.saveTransaction(transactionRecord);
+
+      // Immediately write BOTH Transactions (gid=104373978) AND Books (gid=229659620) to Google Sheet before entering Step 6
+      const syncResult = await Promise.resolve(
+        onTransactionComplete(finalBooks, transactionRecord, booksToAdd, booksToUpdate)
+      );
+
+      setCompletedTransaction({
+        transaction: transactionRecord,
+        userBooks: booksToAdd.filter((b) => b.status !== 'Not Match'),
+        takenBooks: booksToUpdate,
+        syncResult: syncResult || undefined,
+      });
+
+      setStep(6);
+      confetti({
+        particleCount: 80,
+        spread: 70,
+        origin: { y: 0.6 },
+        colors: ['#7D502E', '#4B5E26', '#6A8852', '#E5A93B'],
+      });
+    } finally {
+      setIsSubmittingExchange(false);
+    }
   };
 
   const handleResetKiosk = () => {
@@ -1731,11 +1804,19 @@ export const KioskView: React.FC<KioskViewProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => setIsBrowsingShelfForIdx(0)}
+                  onClick={() => handleOpenShelfBrowser(0)}
                   className="inline-flex items-center gap-2 text-xs sm:text-sm text-[#3E2723] bg-[#EDF4DF] hover:bg-[#E1EDCA] px-5 py-2 rounded-full font-semibold transition-colors cursor-pointer border border-[#BDD199] shadow-2xs"
                 >
-                  <Search className="w-4 h-4 text-[#4B5E26] shrink-0" />
-                  <span>คลิกดูหนังสือพร้อมแลกเปลี่ยน ({availableBooks.length} เล่ม)</span>
+                  {isRefreshingStep5Books ? (
+                    <RefreshCw className="w-4 h-4 text-[#4B5E26] shrink-0 animate-spin" />
+                  ) : (
+                    <Search className="w-4 h-4 text-[#4B5E26] shrink-0" />
+                  )}
+                  <span>
+                    {isRefreshingStep5Books
+                      ? 'กำลังอัปเดตหนังสือล่าสุดจาก Google Sheet...'
+                      : `คลิกดูหนังสือพร้อมแลกเปลี่ยน (${availableBooks.length} เล่ม)`}
+                  </span>
                 </button>
               </div>
 
@@ -1838,10 +1919,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
                       <button
                         type="button"
                         disabled={isCancelled || isDonation}
-                        onClick={() => {
-                          setShelfSearchQuery('');
-                          setIsBrowsingShelfForIdx(idx);
-                        }}
+                        onClick={() => handleOpenShelfBrowser(idx)}
                         className="w-full py-2.5 px-4 bg-[#4B5E26] hover:bg-[#3B4B1D] active:scale-[0.99] disabled:opacity-40 text-white rounded-full text-xs sm:text-[13px] font-semibold transition-all cursor-pointer shadow-xs flex items-center justify-center gap-2"
                       >
                         <Search className="w-3.5 h-3.5 shrink-0" />
@@ -1886,29 +1964,39 @@ export const KioskView: React.FC<KioskViewProps> = ({
               {renderBackButton()}
               <button
                 type="button"
+                disabled={isSubmittingExchange}
                 onClick={handleConfirmExchange}
-                className="w-full sm:flex-1 py-3.5 px-8 rounded-full bg-gradient-to-b from-[#8D5B34] to-[#6F4424] hover:from-[#7B4E2B] hover:to-[#5D381C] active:scale-[0.99] text-white font-bold text-base sm:text-lg shadow-[0_8px_24px_rgba(111,68,36,0.26)] transition-all cursor-pointer flex items-center justify-center gap-3 relative overflow-hidden"
+                className="w-full sm:flex-1 py-3.5 px-8 rounded-full bg-gradient-to-b from-[#8D5B34] to-[#6F4424] hover:from-[#7B4E2B] hover:to-[#5D381C] active:scale-[0.99] disabled:opacity-75 disabled:cursor-wait text-white font-bold text-base sm:text-lg shadow-[0_8px_24px_rgba(111,68,36,0.26)] transition-all cursor-pointer flex items-center justify-center gap-3 relative overflow-hidden"
               >
                 <span
                   aria-hidden="true"
                   className="pointer-events-none absolute inset-[4px] rounded-full border border-dashed border-[#E6C59C]/40"
                 />
-                <span className="relative z-10">สรุปการทำรายการ</span>
-                <span className="relative z-10 flex items-center gap-1.5">
-                  <span className="w-6 h-6 rounded-full bg-white text-[#6F4424] flex items-center justify-center shrink-0 shadow-xs">
-                    <ChevronRight className="w-4 h-4 stroke-[2.75]" />
-                  </span>
-                  <svg
-                    viewBox="0 0 18 22"
-                    fill="none"
-                    className="w-4 h-5 hidden sm:block"
-                    aria-hidden="true"
-                  >
-                    <path d="M2 5L9 1" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
-                    <path d="M4 11L14 10" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
-                    <path d="M2 17L9 21" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
-                  </svg>
-                </span>
+                {isSubmittingExchange ? (
+                  <>
+                    <RefreshCw className="w-5 h-5 animate-spin relative z-10 shrink-0" />
+                    <span className="relative z-10">กำลังบันทึกลง Google Sheet...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="relative z-10">สรุปการทำรายการ</span>
+                    <span className="relative z-10 flex items-center gap-1.5">
+                      <span className="w-6 h-6 rounded-full bg-white text-[#6F4424] flex items-center justify-center shrink-0 shadow-xs">
+                        <ChevronRight className="w-4 h-4 stroke-[2.75]" />
+                      </span>
+                      <svg
+                        viewBox="0 0 18 22"
+                        fill="none"
+                        className="w-4 h-5 hidden sm:block"
+                        aria-hidden="true"
+                      >
+                        <path d="M2 5L9 1" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
+                        <path d="M4 11L14 10" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
+                        <path d="M2 17L9 21" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
+                      </svg>
+                    </span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -2034,6 +2122,58 @@ export const KioskView: React.FC<KioskViewProps> = ({
                       minute: '2-digit',
                     })}
                   </div>
+
+                  {/* Real-time Google Sheet Sync Verification Badge */}
+                  {completedTransaction.syncResult?.synced ? (
+                    <div className="pt-1.5">
+                      <span className="inline-flex items-center gap-1.5 text-[11px] sm:text-xs font-semibold bg-[#E8F5E9] text-[#1E5631] border border-[#C8E6C9] px-3 py-1 rounded-full">
+                        <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-[#2E7D32]" />
+                        <span>บันทึกลง Google Sheet (Books &amp; Transactions) เรียบร้อยแล้ว</span>
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="pt-2">
+                      <div className="bg-[#FEF3C7] border border-[#F5D08A] text-[#78350F] rounded-2xl px-3.5 py-2.5 text-xs space-y-2 text-left">
+                        <div className="flex items-start gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0 text-[#D97706] mt-0.5" />
+                          <span className="leading-snug">
+                            {completedTransaction.syncResult?.error ||
+                              'ยังไม่ได้เชื่อมต่อสิทธิ์ Google Mail เพื่อบันทึกข้อมูลลง Google Sheet (ข้อมูลถูกสำรองไว้ในเครื่องแล้ว)'}
+                          </span>
+                        </div>
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            disabled={isSyncingPending}
+                            onClick={async () => {
+                              if (googleConnected && onRetrySync) {
+                                const res = await onRetrySync();
+                                setCompletedTransaction((prev) =>
+                                  prev ? { ...prev, syncResult: res } : prev
+                                );
+                              } else {
+                                onOpenAdminLogin?.();
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 bg-[#1E5631] hover:bg-[#164024] disabled:opacity-60 text-white px-3.5 py-1.5 rounded-full text-[11px] sm:text-xs font-semibold transition-colors cursor-pointer"
+                          >
+                            {isSyncingPending ? (
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <UploadCloud className="w-3.5 h-3.5" />
+                            )}
+                            <span>
+                              {isSyncingPending
+                                ? 'กำลังบันทึกลง Google Sheet...'
+                                : googleConnected
+                                  ? 'ลองส่งขึ้น Google Sheet อีกครั้ง'
+                                  : 'ลงชื่อเข้าใช้ Google Mail เพื่อบันทึกลง Sheet ทันที'}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Details Section */}
@@ -2187,22 +2327,40 @@ export const KioskView: React.FC<KioskViewProps> = ({
       {isBrowsingShelfForIdx !== null && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-[#FFFCF7] rounded-[28px] p-6 w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl border border-[#EAE0D2]">
-            <div className="flex items-center justify-between pb-3 border-b border-[#EFE6D8]">
+            <div className="flex items-center justify-between pb-3 border-b border-[#EFE6D8] gap-3">
               <div>
-                <h3 className="font-bold text-lg text-[#5C3A21]">
-                  เลือกหนังสือบนชั้นที่พร้อมแลก
+                <h3 className="font-bold text-lg text-[#5C3A21] flex items-center gap-2">
+                  <span>เลือกหนังสือบนชั้นที่พร้อมแลก</span>
+                  {isRefreshingStep5Books && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#4B5E26] bg-[#EDF4DF] border border-[#CFE2AD] px-2 py-0.5 rounded-full">
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      <span>กำลังซิงค์ล่าสุด</span>
+                    </span>
+                  )}
                 </h3>
                 <p className="text-xs text-[#7E7369]">
-                  คลิกที่เล่มที่ต้องการเพื่อเลือกแลกในรายการที่ {isBrowsingShelfForIdx + 1}
+                  ข้อมูลล่าสุดจาก Google Sheet ({availableBooks.length} เล่ม) · คลิกเล่มที่ต้องการเพื่อเลือกแลกในรายการที่ {isBrowsingShelfForIdx + 1}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsBrowsingShelfForIdx(null)}
-                className="w-8 h-8 rounded-full bg-white border border-[#E5D8C8] flex items-center justify-center text-[#7E7369] hover:text-[#3E2723] cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={isRefreshingStep5Books}
+                  onClick={() => refreshStep5LiveBooks()}
+                  title="ดึงข้อมูลล่าสุดจาก Google Sheet"
+                  className="h-8 px-3 rounded-full bg-[#EDF4DF] hover:bg-[#DCEAC2] border border-[#CFE2AD] flex items-center justify-center gap-1.5 text-xs font-semibold text-[#3B4C1D] disabled:opacity-60 cursor-pointer transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingStep5Books ? 'animate-spin' : ''}`} />
+                  <span className="hidden sm:inline">รีเฟรช</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsBrowsingShelfForIdx(null)}
+                  className="w-8 h-8 rounded-full bg-white border border-[#E5D8C8] flex items-center justify-center text-[#7E7369] hover:text-[#3E2723] cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             <div className="py-3">
