@@ -25,8 +25,69 @@ provider.setCustomParameters({
   include_granted_scopes: 'true',
 });
 
+const OAUTH_SESSION_KEY = 'bookswap_google_oauth_session_v1';
+// Google OAuth access tokens expire after 60 minutes; treat as expired at 55 minutes for safety
+const TOKEN_TTL_MS = 55 * 60 * 1000;
+
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
+let cachedTokenExpiresAt: number | null = null;
+
+function saveSessionToken(token: string, email?: string | null) {
+  const expiresAt = Date.now() + TOKEN_TTL_MS;
+  cachedAccessToken = token;
+  cachedTokenExpiresAt = expiresAt;
+  try {
+    sessionStorage.setItem(
+      OAUTH_SESSION_KEY,
+      JSON.stringify({ token, expiresAt, email: email || '' })
+    );
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function loadSessionToken(): { token: string; expiresAt: number; email?: string } | null {
+  if (cachedAccessToken && cachedTokenExpiresAt && Date.now() < cachedTokenExpiresAt) {
+    return { token: cachedAccessToken, expiresAt: cachedTokenExpiresAt };
+  }
+  try {
+    const raw = sessionStorage.getItem(OAUTH_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (
+      typeof parsed?.token === 'string' &&
+      parsed.token.length > 0 &&
+      typeof parsed?.expiresAt === 'number' &&
+      Date.now() < parsed.expiresAt
+    ) {
+      cachedAccessToken = parsed.token;
+      cachedTokenExpiresAt = parsed.expiresAt;
+      return { token: parsed.token, expiresAt: parsed.expiresAt, email: parsed.email };
+    }
+    sessionStorage.removeItem(OAUTH_SESSION_KEY);
+  } catch {
+    // ignore
+  }
+  cachedAccessToken = null;
+  cachedTokenExpiresAt = null;
+  return null;
+}
+
+export function invalidateAccessToken(): void {
+  cachedAccessToken = null;
+  cachedTokenExpiresAt = null;
+  try {
+    sessionStorage.removeItem(OAUTH_SESSION_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export function getTokenExpiresAt(): number | null {
+  const session = loadSessionToken();
+  return session ? session.expiresAt : null;
+}
 
 export interface SpreadsheetAccessResult {
   hasAccess: boolean;
@@ -206,14 +267,15 @@ export const initAuth = (
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
+      const session = loadSessionToken();
+      if (session?.token) {
+        if (onAuthSuccess) onAuthSuccess(user, session.token);
       } else if (!isSigningIn) {
-        cachedAccessToken = null;
+        invalidateAccessToken();
         if (onAuthFailure) onAuthFailure();
       }
     } else {
-      cachedAccessToken = null;
+      invalidateAccessToken();
       if (onAuthFailure) onAuthFailure();
     }
   });
@@ -252,23 +314,23 @@ export const googleSignIn = async (
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       await signOut(auth);
-      cachedAccessToken = null;
+      invalidateAccessToken();
       throw new Error('ไม่สามารถรับสิทธิ์ OAuth Access Token จาก Google ได้');
     }
 
     const accessCheck = await verifySpreadsheetAccess(credential.accessToken, spreadsheetId);
     if (!accessCheck.hasAccess) {
       await signOut(auth);
-      cachedAccessToken = null;
+      invalidateAccessToken();
       throw new Error(
         `${accessCheck.reason} (บัญชีที่คุณใช้คือ ${email || 'ไม่ระบุ'})`
       );
     }
 
-    cachedAccessToken = credential.accessToken;
+    saveSessionToken(credential.accessToken, email);
     return {
       user: result.user,
-      accessToken: cachedAccessToken,
+      accessToken: credential.accessToken,
       spreadsheetTitle: accessCheck.title,
       canEdit: accessCheck.canEdit,
     };
@@ -282,10 +344,11 @@ export const googleSignIn = async (
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken;
+  const session = loadSessionToken();
+  return session ? session.token : null;
 };
 
 export const logout = async () => {
   await signOut(auth);
-  cachedAccessToken = null;
+  invalidateAccessToken();
 };

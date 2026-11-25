@@ -1,10 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { AlertTriangle, CheckCircle2, RefreshCw, UploadCloud } from 'lucide-react';
 import type { Book, SystemSettings, TransactionRecord } from './types';
 import { StorageService } from './services/storage';
-import { initAuth, logout, getAccessToken } from './services/firebaseAuth';
 import {
+  initAuth,
+  logout,
+  getAccessToken,
+  invalidateAccessToken,
+  getTokenExpiresAt,
+} from './services/firebaseAuth';
+import {
+  SheetApiError,
   appendBookToSheet,
-  appendTransactionToSheet,
   syncAllBooksToSheet,
   syncAllTransactionsToSheet,
   createBookSwapSpreadsheet,
@@ -38,9 +45,18 @@ export default function App() {
   const [googleUser, setGoogleUser] = useState<any | null>(null);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
 
-  // Track in-flight Sheet writes & unsynced local transactions to guarantee sequential non-duplicate U codes
-  const pendingSyncRef = useRef<Promise<void> | null>(null);
-  const hasUnsyncedLocalTransactionsRef = useRef<boolean>(false);
+  // Persistent Pending Sync state (guarantees zero data loss even if token expires after 1 hr or browser refreshes)
+  const [pendingSyncCount, setPendingSyncCount] = useState<number>(() =>
+    StorageService.getPendingSyncCount()
+  );
+  const [isFlushingPending, setIsFlushingPending] = useState<boolean>(false);
+  const [syncBanner, setSyncBanner] = useState<{
+    type: 'warning' | 'error' | 'success';
+    text: string;
+  } | null>(null);
+
+  // Track in-flight Sheet writes so subsequent pulls always wait for writes to complete first
+  const pendingSyncRef = useRef<Promise<any> | null>(null);
 
   const getActiveSpreadsheetId = useCallback(() => {
     const currentSettings = StorageService.getSettings();
@@ -52,7 +68,159 @@ export default function App() {
     );
   }, []);
 
-  // Authoritative Pull: fetches exact latest data from Google Sheet and updates system state & localStorage
+  /**
+   * Flushes ALL queued unsynced Kiosk transactions, new U books, and matched status updates
+   * to Google Sheets using safe Merge-Before-Write (never overwrites other Kiosks' rows,
+   * and ONLY clears the local pending queue after BOTH Books & Transactions return HTTP 200 OK).
+   */
+  const flushPendingSyncToGoogleSheet = useCallback(
+    async (
+      tokenOverride?: string | null
+    ): Promise<{ synced: boolean; count: number; reason?: 'no_auth' | 'error'; error?: string }> => {
+      if (!StorageService.hasPendingSync()) {
+        setPendingSyncCount(0);
+        return { synced: true, count: 0 };
+      }
+
+      const token =
+        tokenOverride !== undefined
+          ? tokenOverride
+          : googleToken || (await getAccessToken().catch(() => null));
+
+      if (!token) {
+        const count = StorageService.getPendingSyncCount();
+        const msg =
+          'ยังไม่ได้ลงชื่อเข้าใช้ Google Mail (หรือสิทธิ์ครบ 1 ชม.) — ข้อมูลถูกสำรองไว้ในเครื่องอย่างปลอดภัยแล้ว กรุณากดลงชื่อเข้าใช้ Google Mail เพื่อส่งข้อมูลขึ้น Google Sheet';
+        StorageService.setPendingSyncError(msg);
+        setPendingSyncCount(count);
+        setSyncBanner({ type: 'warning', text: msg });
+        return { synced: false, count, reason: 'no_auth', error: msg };
+      }
+
+      setIsFlushingPending(true);
+      try {
+        let spreadsheetId = getActiveSpreadsheetId();
+        let folderId = StorageService.getSettings().connectedDriveFolderId;
+
+        if (!spreadsheetId) {
+          spreadsheetId = await createBookSwapSpreadsheet(token);
+          folderId = await getOrCreateBookCoversFolder(token);
+          const updated = {
+            ...StorageService.getSettings(),
+            connectedSpreadsheetId: spreadsheetId,
+            connectedDriveFolderId: folderId,
+          };
+          StorageService.saveSettings(updated);
+          setSettings(updated);
+        } else if (!folderId) {
+          try {
+            folderId = await getOrCreateBookCoversFolder(token);
+            const updated = { ...StorageService.getSettings(), connectedDriveFolderId: folderId };
+            StorageService.saveSettings(updated);
+            setSettings(updated);
+          } catch (folderErr) {
+            console.warn('Drive folder setup non-fatal:', folderErr);
+          }
+        }
+
+        // 1. Upload any pending cover images to Google Drive (non-fatal)
+        const currentQueue = StorageService.getPendingSyncQueue();
+        const pendingCountBefore = StorageService.getPendingSyncCount();
+        if (folderId) {
+          let queueModified = false;
+          for (const b of currentQueue.addedBooks) {
+            if (b.coverImage && b.coverImage.startsWith('data:image') && !b.driveFileId) {
+              try {
+                const driveRes = await uploadCoverImageToDrive(
+                  token,
+                  folderId,
+                  `${b.code}_${b.title.slice(0, 20)}.jpg`,
+                  b.coverImage
+                );
+                b.driveFileId = driveRes.fileId;
+                queueModified = true;
+              } catch (e) {
+                console.warn('Cover drive upload non-fatal:', e);
+              }
+            }
+          }
+          if (queueModified) {
+            StorageService.savePendingSyncQueue(currentQueue);
+          }
+        }
+
+        // 2. Fetch latest remote Books & Transactions first so Merge-Before-Write never overwrites other devices
+        const [remoteBooks, remoteTx] = await Promise.all([
+          fetchBooksFromSheet(token, spreadsheetId),
+          fetchTransactionsFromSheet(token, spreadsheetId).catch(() => []),
+        ]);
+
+        const mergedBooks = StorageService.mergeRemoteBooksWithPending(remoteBooks);
+        const mergedTx = StorageService.mergeRemoteTransactionsWithPending(remoteTx);
+
+        // 3. Write BOTH Books AND Transactions strictly (throws SheetApiError on 401/403/5xx)
+        await syncAllBooksToSheet(token, spreadsheetId, mergedBooks);
+        await syncAllTransactionsToSheet(token, spreadsheetId, mergedTx);
+
+        // 4. ONLY clear pending queue after BOTH Google Sheet tabs confirm HTTP 200 OK
+        StorageService.clearPendingSyncQueue();
+        StorageService.saveBooks(mergedBooks);
+        StorageService.syncUsedCodesFromBooks(mergedBooks);
+        StorageService.saveTransactions(mergedTx);
+
+        setBooks(mergedBooks);
+        setTransactions(mergedTx);
+        setPendingSyncCount(0);
+
+        const finalSettings: SystemSettings = {
+          ...StorageService.getSettings(),
+          connectedSpreadsheetId: spreadsheetId,
+          connectedDriveFolderId: folderId,
+          lastSyncTime: new Date().toISOString(),
+        };
+        StorageService.saveSettings(finalSettings);
+        setSettings(finalSettings);
+
+        setSyncBanner({
+          type: 'success',
+          text: `บันทึกข้อมูลขึ้น Google Sheet (Books และ Transactions) สำเร็จแล้ว (${pendingCountBefore} รายการ)`,
+        });
+        setTimeout(() => {
+          setSyncBanner((prev) => (prev?.type === 'success' ? null : prev));
+        }, 6000);
+
+        return { synced: true, count: pendingCountBefore };
+      } catch (err: any) {
+        console.error('Google Sheet pending-queue flush failed:', err);
+        const isExpired =
+          (err instanceof SheetApiError && err.isAuthExpired) ||
+          String(err?.message || '').includes('401') ||
+          String(err?.message || '').includes('หมดอายุ');
+
+        if (isExpired) {
+          invalidateAccessToken();
+          setGoogleToken(null);
+        }
+
+        const friendlyError =
+          err?.message ||
+          'ไม่สามารถส่งข้อมูลขึ้น Google Sheet ได้ (ข้อมูลยังถูกสำรองไว้ในเครื่องอย่างปลอดภัย)';
+        StorageService.setPendingSyncError(friendlyError);
+        const remaining = StorageService.getPendingSyncCount();
+        setPendingSyncCount(remaining);
+        setSyncBanner({
+          type: 'error',
+          text: `${friendlyError} (ค้างส่ง ${remaining} รายการ)`,
+        });
+        return { synced: false, count: remaining, reason: 'error', error: friendlyError };
+      } finally {
+        setIsFlushingPending(false);
+      }
+    },
+    [googleToken, getActiveSpreadsheetId]
+  );
+
+  // Authoritative Pull: fetches exact latest data from Google Sheet and safely merges with any pending local queue
   const pullFromGoogleSheet = useCallback(
     async (tokenOverride?: string | null): Promise<{ books: Book[]; transactions: TransactionRecord[] }> => {
       if (pendingSyncRef.current) {
@@ -71,14 +239,22 @@ export default function App() {
         fetchSettingsFromSheet(token, targetId).catch(() => null),
       ]);
 
-      const sortedBooks = StorageService.sortBooks(fetchedBooks);
-      StorageService.saveBooks(sortedBooks);
-      StorageService.syncUsedCodesFromBooks(sortedBooks);
-      hasUnsyncedLocalTransactionsRef.current = false;
-      setBooks(sortedBooks);
+      // Rescue any real unsynced Kiosk transactions/books from localStorage before merging
+      StorageService.adoptLegacyUnsyncedLocalData(fetchedBooks, fetchedTx);
 
-      StorageService.saveTransactions(fetchedTx);
-      setTransactions(fetchedTx);
+      // Merge remote Google Sheet rows with any pending local Kiosk items (ZERO data loss on refresh!)
+      const mergedBooks = StorageService.mergeRemoteBooksWithPending(fetchedBooks);
+      const mergedTx = StorageService.mergeRemoteTransactionsWithPending(fetchedTx);
+
+      StorageService.saveBooks(mergedBooks);
+      StorageService.syncUsedCodesFromBooks(mergedBooks);
+      setBooks(mergedBooks);
+
+      StorageService.saveTransactions(mergedTx);
+      setTransactions(mergedTx);
+
+      const pendingCount = StorageService.getPendingSyncCount();
+      setPendingSyncCount(pendingCount);
 
       const updatedSettings: SystemSettings = {
         ...StorageService.getSettings(),
@@ -88,7 +264,7 @@ export default function App() {
       StorageService.saveSettings(updatedSettings);
       setSettings(updatedSettings);
 
-      return { books: sortedBooks, transactions: fetchedTx };
+      return { books: mergedBooks, transactions: mergedTx };
     },
     [googleToken, getActiveSpreadsheetId]
   );
@@ -98,10 +274,15 @@ export default function App() {
     if (pendingSyncRef.current) {
       await pendingSyncRef.current.catch(() => {});
     }
-    // If previous Kiosk transactions haven't been synced to Google Sheet (e.g. offline/not logged in),
-    // preserve local U_COUNTER & books so the next visitor gets the next sequential U code without duplicates.
-    if (hasUnsyncedLocalTransactionsRef.current) {
-      return StorageService.getBooks();
+    // If there are pending unsynced items and we have a token, flush first so Sheet is 100% up-to-date
+    if (StorageService.hasPendingSync()) {
+      const liveToken = googleToken || (await getAccessToken().catch(() => null));
+      if (liveToken) {
+        await flushPendingSyncToGoogleSheet(liveToken);
+      } else {
+        // Keep local books + pending queue so U codes continue sequentially without duplicates
+        return StorageService.getBooks();
+      }
     }
     try {
       const res = await pullFromGoogleSheet();
@@ -110,7 +291,7 @@ export default function App() {
       console.warn('Pre-assign Google Sheet refresh non-fatal, keeping local books:', err);
       return StorageService.getBooks();
     }
-  }, [pullFromGoogleSheet]);
+  }, [googleToken, flushPendingSyncToGoogleSheet, pullFromGoogleSheet]);
 
   const refreshFromGoogleSheet = useCallback(
     async (tokenOverride?: string | null) => {
@@ -181,6 +362,10 @@ export default function App() {
 
         return { synced: true };
       } catch (err: any) {
+        if (err instanceof SheetApiError && err.isAuthExpired) {
+          invalidateAccessToken();
+          setGoogleToken(null);
+        }
         console.error('Append new book to Google Sheet error:', err);
         return {
           synced: false,
@@ -192,38 +377,83 @@ export default function App() {
     [googleToken, getActiveSpreadsheetId, settings.connectedDriveFolderId]
   );
 
-  // Load initial data from persistent Storage, then sync live data from Google Sheet
+  // Load initial data from persistent Storage, restore session token if valid, and sync live data from Google Sheet
   useEffect(() => {
     setBooks(StorageService.getBooks());
     setSettings(StorageService.getSettings());
     setTransactions(StorageService.getTransactions());
+    setPendingSyncCount(StorageService.getPendingSyncCount());
 
-    // Immediately pull live public Google Sheet so Kiosk Home counts match Dashboard & Sheet
+    // Immediately pull live Google Sheet (safely preserving any pending unsynced local queue)
     refreshFromGoogleSheet(null);
 
-    // Initialize Firebase Auth listener
-    initAuth(
+    // Initialize Firebase Auth listener (restores unexpired sessionStorage OAuth token across F5 refresh)
+    const unsubscribe = initAuth(
       (user, token) => {
         setGoogleUser(user);
         setGoogleToken(token);
+        setIsAdminLoggedIn(true);
+        setAdminUsername(user.email || user.displayName || 'Google Staff');
       },
       () => {
         setGoogleUser(null);
         setGoogleToken(null);
       }
     );
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
   }, []);
 
-  // Handle transaction from Kiosk
+  // Periodic OAuth token expiry monitor (Google OAuth access tokens expire after 1 hour)
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (googleToken && !getTokenExpiresAt()) {
+        invalidateAccessToken();
+        setGoogleToken(null);
+        setSyncBanner({
+          type: 'warning',
+          text: 'สิทธิ์การเชื่อมต่อ Google Mail ครบ 1 ชั่วโมงแล้ว กรุณากดลงชื่อเข้าใช้ Google Mail ใหม่เพื่อให้ระบบบันทึกข้อมูลลง Google Sheet อัตโนมัติได้ต่อเนื่อง',
+        });
+      }
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [googleToken]);
+
+  // Handle transaction from Kiosk: enqueue persistently FIRST, then flush to Google Sheet immediately
   const handleTransactionComplete = async (
     updatedBooks: Book[],
-    newTransaction: TransactionRecord
+    newTransaction: TransactionRecord,
+    addedBooks?: Book[],
+    matchedUpdates?: Book[]
   ) => {
+    const txAdded =
+      addedBooks && addedBooks.length > 0
+        ? addedBooks
+        : updatedBooks.filter(
+            (b) =>
+              (b.transactionId || '').trim() === newTransaction.id ||
+              newTransaction.booksBrought.includes(b.code)
+          );
+    const txUpdated =
+      matchedUpdates && matchedUpdates.length > 0
+        ? matchedUpdates
+        : updatedBooks.filter(
+            (b) =>
+              (b.matchedTransactionId || '').trim() === newTransaction.id &&
+              newTransaction.booksTaken.includes(b.code)
+          );
+
+    // Persist to Pending Sync Queue BEFORE attempting network upload so ZERO records are ever lost
+    StorageService.enqueuePendingTransaction(newTransaction, txAdded, txUpdated);
+    setPendingSyncCount(StorageService.getPendingSyncCount());
+
     setBooks(updatedBooks);
     setTransactions(StorageService.getTransactions());
 
-    // Track asynchronous background sync to Google Sheets & Google Drive so subsequent pulls wait for it
-    const syncTask = syncTransactionToGoogleWorkspace(updatedBooks, newTransaction).finally(() => {
+    // Track flush promise so subsequent Step 3 pulls wait for this write to finish
+    const syncTask = flushPendingSyncToGoogleSheet().finally(() => {
       if (pendingSyncRef.current === syncTask) {
         pendingSyncRef.current = null;
       }
@@ -231,84 +461,12 @@ export default function App() {
     pendingSyncRef.current = syncTask;
   };
 
-  const syncTransactionToGoogleWorkspace = async (
-    allBooks: Book[],
-    tx: TransactionRecord
-  ) => {
-    try {
-      const token = googleToken || (await getAccessToken());
-      if (!token) {
-        hasUnsyncedLocalTransactionsRef.current = true;
-        return;
-      }
-
-      let spreadsheetId = getActiveSpreadsheetId();
-      let folderId = settings.connectedDriveFolderId;
-
-      // Auto-provision Google Sheet and Drive folder if not yet created
-      if (!spreadsheetId) {
-        spreadsheetId = await createBookSwapSpreadsheet(token);
-        folderId = await getOrCreateBookCoversFolder(token);
-        const updated = {
-          ...settings,
-          connectedSpreadsheetId: spreadsheetId,
-          connectedDriveFolderId: folderId,
-          lastSyncTime: new Date().toISOString(),
-        };
-        setSettings(updated);
-        StorageService.saveSettings(updated);
-      } else if (!folderId) {
-        folderId = await getOrCreateBookCoversFolder(token);
-        const updated = { ...settings, connectedDriveFolderId: folderId };
-        setSettings(updated);
-        StorageService.saveSettings(updated);
-      }
-
-      // 1. Append transaction to Google Sheet
-      await appendTransactionToSheet(token, spreadsheetId, tx);
-
-      // 2. Upload cover images for newly brought books to Google Drive
-      const broughtBooks = allBooks.filter((b) => tx.booksBrought.includes(b.code));
-      for (const b of broughtBooks) {
-        if (b.coverImage && b.coverImage.startsWith('data:image')) {
-          try {
-            const driveRes = await uploadCoverImageToDrive(
-              token,
-              folderId!,
-              `${b.code}_${b.title.slice(0, 20)}.jpg`,
-              b.coverImage
-            );
-            b.driveFileId = driveRes.fileId;
-          } catch (e) {
-            console.warn('Cover drive upload non-fatal:', e);
-          }
-        }
-      }
-
-      // 3. Auto-sync ALL books (including new additions and matched status changes) to Google Sheets
-      await syncAllBooksToSheet(token, spreadsheetId, allBooks);
-      hasUnsyncedLocalTransactionsRef.current = false;
-
-      const finalSettings = {
-        ...StorageService.getSettings(),
-        connectedSpreadsheetId: spreadsheetId,
-        connectedDriveFolderId: folderId,
-        lastSyncTime: new Date().toISOString(),
-      };
-      setSettings(finalSettings);
-      StorageService.saveSettings(finalSettings);
-      StorageService.saveBooks(allBooks);
-      setBooks([...allBooks]);
-    } catch (err) {
-      hasUnsyncedLocalTransactionsRef.current = true;
-      console.error('Google Workspace auto-sync on match error:', err);
-    }
-  };
-
   const handleAdminLogout = async () => {
     await logout();
     setIsAdminLoggedIn(false);
     setAdminUsername(null);
+    setGoogleUser(null);
+    setGoogleToken(null);
     setCurrentTab('kiosk');
   };
 
@@ -319,7 +477,7 @@ export default function App() {
       return;
     }
     setCurrentTab(tab);
-    if (tab === 'kiosk' && !hasUnsyncedLocalTransactionsRef.current) {
+    if (tab === 'kiosk') {
       refreshFromGoogleSheet();
     }
   };
@@ -344,8 +502,89 @@ export default function App() {
         adminUsername={adminUsername}
         onOpenAdminLogin={() => setIsLoginModalOpen(true)}
         onAdminLogout={handleAdminLogout}
-        googleConnected={Boolean(googleToken || settings.connectedSpreadsheetId)}
+        googleConnected={Boolean(googleToken)}
+        pendingSyncCount={pendingSyncCount}
+        isSyncingPending={isFlushingPending}
+        onSyncPendingNow={() => {
+          flushPendingSyncToGoogleSheet();
+        }}
       />
+
+      {/* Honest Sync Status & Pending Queue Alert Banner */}
+      {(pendingSyncCount > 0 || syncBanner) && (
+        <div className="max-w-6xl w-full mx-auto px-4 sm:px-6 pt-3">
+          <div
+            className={`rounded-2xl px-4 py-2.5 text-xs sm:text-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 shadow-xs border ${
+              syncBanner?.type === 'success' && pendingSyncCount === 0
+                ? 'bg-[#E8F5E9] border-[#C8E6C9] text-[#1E5631]'
+                : syncBanner?.type === 'error'
+                  ? 'bg-[#FDECEC] border-[#F5C2C0] text-[#8B2620]'
+                  : 'bg-[#FEF3C7] border-[#F5D08A] text-[#78350F]'
+            }`}
+          >
+            <div className="flex items-start sm:items-center gap-2 min-w-0">
+              {syncBanner?.type === 'success' && pendingSyncCount === 0 ? (
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-[#2E7D32] mt-0.5 sm:mt-0" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 shrink-0 text-[#D97706] mt-0.5 sm:mt-0" />
+              )}
+              <span className="leading-snug">
+                {syncBanner?.text ||
+                  `มีข้อมูลการแลกค้างส่งขึ้น Google Sheet จำนวน ${pendingSyncCount} รายการ (สำรองไว้ในเครื่องอย่างปลอดภัยแล้ว)`}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+              {pendingSyncCount > 0 && (
+                <button
+                  type="button"
+                  disabled={isFlushingPending}
+                  onClick={() => {
+                    if (googleToken) {
+                      flushPendingSyncToGoogleSheet();
+                    } else {
+                      setIsLoginModalOpen(true);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 bg-[#1E5631] hover:bg-[#164024] disabled:opacity-60 text-white px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  {isFlushingPending ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <UploadCloud className="w-3.5 h-3.5" />
+                  )}
+                  <span>
+                    {isFlushingPending
+                      ? 'กำลังส่งข้อมูล...'
+                      : googleToken
+                        ? `ส่งขึ้น Google Sheet ทันที (${pendingSyncCount})`
+                        : 'เชื่อม Google Mail เพื่อส่งข้อมูล'}
+                  </span>
+                </button>
+              )}
+              {!googleToken && pendingSyncCount === 0 && syncBanner?.type !== 'success' && (
+                <button
+                  type="button"
+                  onClick={() => setIsLoginModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 bg-[#7D502E] hover:bg-[#653F22] text-white px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <span>ลงชื่อเข้าใช้ Google Mail</span>
+                </button>
+              )}
+              {pendingSyncCount === 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSyncBanner(null)}
+                  className="text-xs opacity-60 hover:opacity-100 px-1 cursor-pointer"
+                  aria-label="ปิดการแจ้งเตือน"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="flex-1">
         {currentTab === 'kiosk' && (
@@ -378,8 +617,18 @@ export default function App() {
                 await syncAllBooksToSheet(token, targetId, list);
                 const allTx = StorageService.getTransactions();
                 await syncAllTransactionsToSheet(token, targetId, allTx);
-              } catch (e) {
+                StorageService.clearPendingSyncQueue();
+                setPendingSyncCount(0);
+              } catch (e: any) {
+                if (e instanceof SheetApiError && e.isAuthExpired) {
+                  invalidateAccessToken();
+                  setGoogleToken(null);
+                }
                 console.error('Google Sheets auto-sync error:', e);
+                setSyncBanner({
+                  type: 'error',
+                  text: e?.message || 'เกิดข้อผิดพลาดในการซิงค์ขึ้น Google Sheet',
+                });
               }
             }}
             onSelectTab={handleSelectTab}
@@ -393,16 +642,17 @@ export default function App() {
             transactions={transactions}
             googleConnected={Boolean(googleToken)}
             onConnectGoogle={() => setIsLoginModalOpen(true)}
+            onFlushPendingSync={() => flushPendingSyncToGoogleSheet()}
             onSelectTab={handleSelectTab}
             onOpenAddBook={() => setCurrentTab('books')}
             onSheetDataSynced={(freshBooks, freshTx, freshSettingsPatch) => {
               const sorted = StorageService.sortBooks(freshBooks);
               StorageService.saveBooks(sorted);
               StorageService.syncUsedCodesFromBooks(sorted);
-              hasUnsyncedLocalTransactionsRef.current = false;
               StorageService.saveTransactions(freshTx);
               setBooks(sorted);
               setTransactions(freshTx);
+              setPendingSyncCount(StorageService.getPendingSyncCount());
               if (freshSettingsPatch) {
                 const mergedSettings: SystemSettings = {
                   ...StorageService.getSettings(),
@@ -438,15 +688,19 @@ export default function App() {
           setIsAdminLoggedIn(true);
           setAdminUsername(user);
           setCurrentTab((prev) => (prev === 'kiosk' ? 'dashboard' : prev));
-          await refreshFromGoogleSheet();
         }}
         onGoogleConnected={async (user, token) => {
           setGoogleUser(user);
           setGoogleToken(token);
+          setSyncBanner(null);
           try {
+            // Immediately flush ANY queued unsynced Kiosk transactions/books to Google Sheet FIRST
+            if (StorageService.hasPendingSync()) {
+              await flushPendingSyncToGoogleSheet(token);
+            }
             await pullFromGoogleSheet(token);
           } catch (syncErr) {
-            console.warn('Auto pull on Google connect non-fatal:', syncErr);
+            console.warn('Auto flush/pull on Google connect non-fatal:', syncErr);
           }
         }}
       />

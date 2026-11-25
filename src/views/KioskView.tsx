@@ -47,7 +47,12 @@ import {
 interface KioskViewProps {
   settings: SystemSettings;
   books: Book[];
-  onTransactionComplete: (newBooks: Book[], transaction: TransactionRecord) => void;
+  onTransactionComplete: (
+    newBooks: Book[],
+    transaction: TransactionRecord,
+    addedBooks?: Book[],
+    updatedBooks?: Book[]
+  ) => void;
   onOpenAdminLogin?: () => void;
   onRefreshBooks?: () => Promise<Book[]>;
 }
@@ -539,7 +544,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
     StorageService.saveBooks(finalBooks);
     StorageService.saveTransaction(transactionRecord);
 
-    onTransactionComplete(finalBooks, transactionRecord);
+    onTransactionComplete(finalBooks, transactionRecord, booksToAdd, booksToUpdate);
 
     setCompletedTransaction({
       transaction: transactionRecord,

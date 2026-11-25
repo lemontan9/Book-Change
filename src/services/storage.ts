@@ -9,7 +9,16 @@ const STORAGE_KEYS = {
   U_COUNTER: 'bookswap_u_counter_v1',
   L_COUNTER: 'bookswap_l_counter_v1',
   USED_CODES: 'bookswap_used_codes_v1',
+  PENDING_SYNC: 'bookswap_pending_sync_v1',
 };
+
+export interface PendingSyncQueue {
+  transactions: TransactionRecord[];
+  addedBooks: Book[];
+  updatedBooks: Book[];
+  lastFailedAt?: string;
+  lastError?: string;
+}
 
 export const ACTIVE_SPREADSHEET_ID = '1ppG2ExLSTl5pb1TS47pW2aNvqMVID8qvXwrB3_uOSm0';
 
@@ -678,6 +687,223 @@ export class StorageService {
       usedLCodesCount: lCount,
       usedUCodesCount: uCount,
     };
+  }
+
+  /**
+   * Persistent Pending Sync Queue: safeguards unsynced Kiosk transactions & book changes across refreshes
+   * and 1-hour OAuth token expirations so zero data is ever lost or overwritten by a remote Sheet pull.
+   */
+  static getPendingSyncQueue(): PendingSyncQueue {
+    const empty: PendingSyncQueue = {
+      transactions: [],
+      addedBooks: [],
+      updatedBooks: [],
+    };
+    const raw = localStorage.getItem(STORAGE_KEYS.PENDING_SYNC);
+    if (!raw) return empty;
+    try {
+      const parsed = JSON.parse(raw);
+      return {
+        transactions: Array.isArray(parsed?.transactions) ? parsed.transactions : [],
+        addedBooks: Array.isArray(parsed?.addedBooks) ? parsed.addedBooks : [],
+        updatedBooks: Array.isArray(parsed?.updatedBooks) ? parsed.updatedBooks : [],
+        lastFailedAt: parsed?.lastFailedAt,
+        lastError: parsed?.lastError,
+      };
+    } catch {
+      return empty;
+    }
+  }
+
+  static savePendingSyncQueue(queue: PendingSyncQueue): void {
+    localStorage.setItem(STORAGE_KEYS.PENDING_SYNC, JSON.stringify(queue));
+  }
+
+  static hasPendingSync(): boolean {
+    const q = this.getPendingSyncQueue();
+    return q.transactions.length > 0 || q.addedBooks.length > 0 || q.updatedBooks.length > 0;
+  }
+
+  static getPendingSyncCount(): number {
+    const q = this.getPendingSyncQueue();
+    if (q.transactions.length > 0) return q.transactions.length;
+    return q.addedBooks.length + q.updatedBooks.length;
+  }
+
+  static enqueuePendingTransaction(
+    tx: TransactionRecord,
+    addedBooks: Book[],
+    updatedBooks: Book[]
+  ): PendingSyncQueue {
+    const q = this.getPendingSyncQueue();
+
+    const txMap = new Map<string, TransactionRecord>();
+    q.transactions.forEach((t) => {
+      if (t?.id) txMap.set(t.id.trim(), t);
+    });
+    if (tx?.id) txMap.set(tx.id.trim(), tx);
+
+    const addedMap = new Map<string, Book>();
+    q.addedBooks.forEach((b) => {
+      const key = (b?.code || '').trim().toUpperCase();
+      if (key) addedMap.set(key, b);
+    });
+    addedBooks.forEach((b) => {
+      const key = (b?.code || '').trim().toUpperCase();
+      if (key) addedMap.set(key, b);
+    });
+
+    const updatedMap = new Map<string, Book>();
+    q.updatedBooks.forEach((b) => {
+      const key = (b?.code || '').trim().toUpperCase();
+      if (key) updatedMap.set(key, b);
+    });
+    updatedBooks.forEach((b) => {
+      const key = (b?.code || '').trim().toUpperCase();
+      if (key) {
+        if (addedMap.has(key)) {
+          addedMap.set(key, b);
+        } else {
+          updatedMap.set(key, b);
+        }
+      }
+    });
+
+    const next: PendingSyncQueue = {
+      transactions: Array.from(txMap.values()),
+      addedBooks: Array.from(addedMap.values()),
+      updatedBooks: Array.from(updatedMap.values()),
+      lastFailedAt: q.lastFailedAt,
+      lastError: q.lastError,
+    };
+    this.savePendingSyncQueue(next);
+    return next;
+  }
+
+  static setPendingSyncError(errMsg?: string): void {
+    const q = this.getPendingSyncQueue();
+    q.lastFailedAt = errMsg ? new Date().toISOString() : undefined;
+    q.lastError = errMsg;
+    this.savePendingSyncQueue(q);
+  }
+
+  static clearPendingSyncQueue(): void {
+    localStorage.removeItem(STORAGE_KEYS.PENDING_SYNC);
+  }
+
+  /**
+   * Rescues real unsynced Kiosk transactions/books still sitting in localStorage (e.g., from before
+   * PENDING_SYNC existed) so a remote Google Sheet pull never silently wipes unsynced U1..U25 entries.
+   */
+  static adoptLegacyUnsyncedLocalData(
+    remoteBooks: Book[],
+    remoteTransactions: TransactionRecord[]
+  ): PendingSyncQueue {
+    const remoteBookCodes = new Set(
+      remoteBooks.map((b) => (b.code || '').trim().toUpperCase()).filter(Boolean)
+    );
+    const remoteTxIds = new Set(
+      remoteTransactions.map((t) => (t.id || '').trim()).filter(Boolean)
+    );
+
+    const localTx = this.getTransactions();
+    const localBooks = this.getBooks();
+
+    // Only rescue real Kiosk transactions (id starts with TX-) that are missing from Google Sheet
+    // AND have matching local books with transactionId === tx.id (excludes static dummy INITIAL_BOOKS).
+    const unsyncedTx = localTx.filter((t) => {
+      const id = (t.id || '').trim();
+      if (!id.startsWith('TX-') || remoteTxIds.has(id)) return false;
+      const hasLinkedBook = localBooks.some(
+        (b) =>
+          (b.transactionId || '').trim() === id ||
+          (b.matchedTransactionId || '').trim() === id
+      );
+      return hasLinkedBook;
+    });
+
+    if (unsyncedTx.length === 0) {
+      return this.getPendingSyncQueue();
+    }
+
+    const unsyncedTxIdSet = new Set(unsyncedTx.map((t) => t.id.trim()));
+    const addedToRescue: Book[] = [];
+    const updatedToRescue: Book[] = [];
+
+    localBooks.forEach((b) => {
+      const code = (b.code || '').trim().toUpperCase();
+      if (!code) return;
+      const txId = (b.transactionId || '').trim();
+      const matchedTxId = (b.matchedTransactionId || '').trim();
+
+      if (!remoteBookCodes.has(code) && unsyncedTxIdSet.has(txId)) {
+        addedToRescue.push(b);
+      } else if (remoteBookCodes.has(code) && unsyncedTxIdSet.has(matchedTxId)) {
+        updatedToRescue.push(b);
+      }
+    });
+
+    let queue = this.getPendingSyncQueue();
+    unsyncedTx.forEach((tx) => {
+      const txAdded = addedToRescue.filter((b) => (b.transactionId || '').trim() === tx.id.trim());
+      const txUpdated = updatedToRescue.filter(
+        (b) => (b.matchedTransactionId || '').trim() === tx.id.trim()
+      );
+      queue = this.enqueuePendingTransaction(tx, txAdded, txUpdated);
+    });
+
+    return queue;
+  }
+
+  /**
+   * Merges authoritative Google Sheet books with any pending local Kiosk additions/updates.
+   */
+  static mergeRemoteBooksWithPending(remoteBooks: Book[]): Book[] {
+    const queue = this.getPendingSyncQueue();
+    if (queue.addedBooks.length === 0 && queue.updatedBooks.length === 0) {
+      return this.sortBooks(remoteBooks);
+    }
+
+    const byCode = new Map<string, Book>();
+    remoteBooks.forEach((b) => {
+      const key = (b.code || '').trim().toUpperCase();
+      if (key) byCode.set(key, b);
+    });
+
+    queue.updatedBooks.forEach((b) => {
+      const key = (b.code || '').trim().toUpperCase();
+      if (key) byCode.set(key, b);
+    });
+
+    queue.addedBooks.forEach((b) => {
+      const key = (b.code || '').trim().toUpperCase();
+      if (key && !byCode.has(key)) {
+        byCode.set(key, b);
+      }
+    });
+
+    return this.sortBooks(Array.from(byCode.values()));
+  }
+
+  /**
+   * Merges authoritative Google Sheet transactions with any pending local Kiosk transactions.
+   */
+  static mergeRemoteTransactionsWithPending(remoteTx: TransactionRecord[]): TransactionRecord[] {
+    const queue = this.getPendingSyncQueue();
+    if (queue.transactions.length === 0) return remoteTx;
+
+    const byId = new Map<string, TransactionRecord>();
+    queue.transactions.forEach((t) => {
+      const id = (t.id || '').trim();
+      if (id) byId.set(id, t);
+    });
+    remoteTx.forEach((t) => {
+      const id = (t.id || '').trim();
+      if (id && !byId.has(id)) {
+        byId.set(id, t);
+      }
+    });
+    return Array.from(byId.values());
   }
 
   /**

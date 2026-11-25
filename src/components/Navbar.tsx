@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, LogOut, BookOpen, LayoutDashboard } from 'lucide-react';
+import { ShieldCheck, LogOut, BookOpen, LayoutDashboard, AlertTriangle, RefreshCw } from 'lucide-react';
 
 interface NavbarProps {
   currentTab: 'kiosk' | 'dashboard' | 'books' | 'settings';
@@ -10,6 +10,9 @@ interface NavbarProps {
   onOpenAdminLogin: () => void;
   onAdminLogout: () => void;
   googleConnected: boolean;
+  pendingSyncCount?: number;
+  isSyncingPending?: boolean;
+  onSyncPendingNow?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -21,6 +24,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenAdminLogin,
   onAdminLogout,
   googleConnected,
+  pendingSyncCount = 0,
+  isSyncingPending = false,
+  onSyncPendingNow,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-[#FAF3E6]/75 backdrop-blur-md text-[#3A2D26] border-b border-[#EAE0D2]/70">
@@ -59,13 +65,51 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Right Action: Status dot + Mode Switcher + Staff Login Pill */}
+        {/* Right Action: Honest Google Sheet Sync Status + Mode Switcher + Staff Login Pill */}
         <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
-          {googleConnected && (
+          {pendingSyncCount > 0 ? (
+            <button
+              type="button"
+              disabled={isSyncingPending}
+              onClick={() => {
+                if (googleConnected && onSyncPendingNow) {
+                  onSyncPendingNow();
+                } else {
+                  onOpenAdminLogin();
+                }
+              }}
+              className="flex items-center gap-1.5 bg-[#FFF3CD] hover:bg-[#FFE8A3] text-[#8A4B08] border border-[#EBC76D] px-3 py-1.5 rounded-full text-xs font-semibold shadow-2xs transition-all cursor-pointer whitespace-nowrap shrink-0"
+              title="มีรายการแลกที่ค้างส่งขึ้น Google Sheet คลิกเพื่อเชื่อมต่อ Google Mail และซิงค์ทันที"
+            >
+              {isSyncingPending ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
+              ) : (
+                <AlertTriangle className="w-3.5 h-3.5 text-[#D97706] shrink-0" />
+              )}
+              <span>
+                {isSyncingPending
+                  ? 'กำลังส่งขึ้น Sheet...'
+                  : `ค้างส่ง Sheet (${pendingSyncCount})`}
+              </span>
+            </button>
+          ) : googleConnected ? (
             <span
-              className="w-2.5 h-2.5 rounded-full bg-[#388E3C] ring-2 ring-[#E8F5E9] shrink-0"
-              title="เชื่อมต่อ Google Sheet เรียบร้อยแล้ว"
-            />
+              className="inline-flex items-center gap-1.5 bg-[#E8F5E9] text-[#1E5631] border border-[#C8E6C9] px-2.5 py-1 rounded-full text-[11px] font-semibold shrink-0"
+              title="เชื่อมต่อ Google Mail เรียบร้อย พร้อมบันทึกข้อมูลลง Google Sheet อัตโนมัติ"
+            >
+              <span className="w-2 h-2 rounded-full bg-[#388E3C] shrink-0" />
+              <span className="hidden sm:inline">Sheet พร้อมบันทึก</span>
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenAdminLogin}
+              className="inline-flex items-center gap-1.5 bg-[#FEF3C7] hover:bg-[#FDE68A] text-[#92400E] border border-[#F5D08A] px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors cursor-pointer shrink-0"
+              title="ยังไม่ได้ลงชื่อเข้าใช้ Google Mail (หรือสิทธิ์ครบ 1 ชม.) คลิกเพื่อเชื่อมต่อสิทธิ์บันทึก Google Sheet"
+            >
+              <span className="w-2 h-2 rounded-full bg-[#D97706] shrink-0" />
+              <span className="hidden sm:inline">ยังไม่เชื่อมสิทธิ์บันทึก Sheet</span>
+            </button>
           )}
 
           {isAdminLoggedIn && (

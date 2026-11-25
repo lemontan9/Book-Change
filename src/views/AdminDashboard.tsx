@@ -30,6 +30,7 @@ interface AdminDashboardProps {
   transactions: TransactionRecord[];
   googleConnected?: boolean;
   onConnectGoogle?: () => void;
+  onFlushPendingSync?: () => Promise<{ synced: boolean; error?: string }>;
   onSelectTab?: (tab: 'kiosk' | 'dashboard' | 'books' | 'settings') => void;
   onOpenAddBook?: () => void;
   onSheetDataSynced?: (
@@ -131,13 +132,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         fetchSettingsFromSheet(token, spreadsheetId).catch(() => null),
       ]);
 
-      const sortedBooks = StorageService.sortBooks(fetchedBooks);
+      const pendingQueue = StorageService.adoptLegacyUnsyncedLocalData(
+        fetchedBooks,
+        fetchedTransactions
+      );
+      const mergedBooks = StorageService.mergeRemoteBooksWithPending(fetchedBooks);
+      const mergedTransactions = StorageService.mergeRemoteTransactionsWithPending(
+        fetchedTransactions
+      );
 
-      setSheetBooks(sortedBooks);
-      setSheetTransactions(fetchedTransactions);
-      setUnsyncedBooksList([]);
-      setUnsyncedTxList([]);
-      onSheetDataSyncedRef.current?.(sortedBooks, fetchedTransactions, fetchedSettings);
+      setSheetBooks(mergedBooks);
+      setSheetTransactions(mergedTransactions);
+      setUnsyncedBooksList(pendingQueue.addedBooks);
+      setUnsyncedTxList(pendingQueue.transactions);
+      onSheetDataSyncedRef.current?.(mergedBooks, mergedTransactions, fetchedSettings);
 
       setIsUsingFallback(false);
       setLastFetchedAt(
@@ -147,9 +155,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setIsFetched(true);
 
       if (isManualTrigger) {
+        const pendingInfo =
+          pendingQueue.transactions.length > 0
+            ? ` (และมีค้างส่งขึ้น Sheet ${pendingQueue.transactions.length} รายการ)`
+            : '';
         setSyncNotice({
           type: 'success',
-          text: `Sync ข้อมูลล่าสุดจาก Google Sheet สำเร็จ! (หนังสือ ${sortedBooks.length.toLocaleString()} เล่ม, ธุรกรรม ${fetchedTransactions.length.toLocaleString()} รายการ)`,
+          text: `Sync ข้อมูลล่าสุดจาก Google Sheet สำเร็จ! (หนังสือ ${mergedBooks.length.toLocaleString()} เล่ม, ธุรกรรม ${mergedTransactions.length.toLocaleString()} รายการ)${pendingInfo}`,
         });
       }
     } catch (err: any) {
@@ -196,15 +208,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         return;
       }
 
-      const allLocalBooks = books && books.length > 0 ? books : StorageService.getBooks();
-      const allLocalTx = transactions && transactions.length > 0 ? transactions : StorageService.getTransactions();
+      // Merge latest remote Google Sheet rows with pending local records before writing so nothing is overwritten
+      const [remoteBooks, remoteTx] = await Promise.all([
+        fetchBooksFromSheet(token, spreadsheetId),
+        fetchTransactionsFromSheet(token, spreadsheetId).catch(() => []),
+      ]);
+      StorageService.adoptLegacyUnsyncedLocalData(remoteBooks, remoteTx);
+      const mergedBooks = StorageService.mergeRemoteBooksWithPending(remoteBooks);
+      const mergedTx = StorageService.mergeRemoteTransactionsWithPending(remoteTx);
 
-      await syncAllBooksToSheet(token, spreadsheetId, allLocalBooks);
-      await syncAllTransactionsToSheet(token, spreadsheetId, allLocalTx);
+      await syncAllBooksToSheet(token, spreadsheetId, mergedBooks);
+      await syncAllTransactionsToSheet(token, spreadsheetId, mergedTx);
+
+      StorageService.clearPendingSyncQueue();
+      StorageService.saveBooks(mergedBooks);
+      StorageService.syncUsedCodesFromBooks(mergedBooks);
+      StorageService.saveTransactions(mergedTx);
 
       setSyncNotice({
         type: 'success',
-        text: `ซิงค์ข้อมูลหนังสือทั้งหมด (${allLocalBooks.length} เล่ม) และธุรกรรม (${allLocalTx.length} รายการ) ขึ้น Google Sheet สำเร็จเรียบร้อย!`,
+        text: `ซิงค์ข้อมูลหนังสือทั้งหมด (${mergedBooks.length} เล่ม) และธุรกรรม (${mergedTx.length} รายการ) ขึ้น Google Sheet สำเร็จเรียบร้อย!`,
       });
       setUnsyncedBooksList([]);
       setUnsyncedTxList([]);
@@ -762,16 +785,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
       </div>
 
-      {/* Unsynced Items Notification Banner (เฉพาะเมื่อ Super Admin เข้าสู่ระบบ เพื่อป้องกันความสับสนสำหรับเจ้าหน้าที่ทั่วไป) */}
-      {googleConnected && !isDismissedUnsynced && unsyncedBooksList.length > 0 && (
+      {/* Unsynced Items Notification Banner */}
+      {!isDismissedUnsynced && (unsyncedBooksList.length > 0 || unsyncedTxList.length > 0) && (
         <div className="bg-[#FBF3DF] border border-[#E8D09B] rounded-2xl p-3.5 text-xs text-[#6B471C] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 shadow-xs">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-[#9E6F38] shrink-0" />
             <span>
-              <strong className="text-[#5C3A21]">มีข้อมูลใหม่ในระบบที่ยังไม่ได้ส่งขึ้น Google Sheet:</strong> หนังสือ {unsyncedBooksList.length} เล่ม ({unsyncedBooksList.map((b) => b.code).join(', ')})
+              <strong className="text-[#5C3A21]">มีข้อมูลใหม่ในเครื่องที่ยังไม่ได้ส่งขึ้น Google Sheet:</strong>{' '}
+              {unsyncedBooksList.length > 0 && (
+                <>หนังสือ {unsyncedBooksList.length} เล่ม ({unsyncedBooksList.map((b) => b.code).join(', ')})</>
+              )}
               {unsyncedTxList.length > 0 && ` และธุรกรรม ${unsyncedTxList.length} รายการ`}
               <span className="text-[#7E7369] block sm:inline sm:ml-1">
-                (ข้อมูลรวมแสดงใน Dashboard ให้เรียบร้อยแล้ว)
+                (ข้อมูลถูกสำรองไว้อย่างปลอดภัย ไม่สูญหาย)
               </span>
             </span>
           </div>
@@ -783,7 +809,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               className="bg-[#7D502E] hover:bg-[#653F22] text-white px-3.5 py-1.5 rounded-full font-semibold text-xs flex items-center gap-1 transition-colors cursor-pointer"
             >
               <UploadCloud className="w-3.5 h-3.5" />
-              <span>ซิงค์ขึ้น Sheet ทันที</span>
+              <span>{googleConnected ? 'ซิงค์ขึ้น Sheet ทันที' : 'เชื่อม Google Mail เพื่อซิงค์'}</span>
             </button>
             <button
               type="button"

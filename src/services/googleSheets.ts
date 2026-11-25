@@ -1,5 +1,38 @@
 import type { Book, TransactionRecord, SystemSettings } from '../types';
 
+export class SheetApiError extends Error {
+  status: number;
+  isAuthExpired: boolean;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'SheetApiError';
+    this.status = status;
+    this.isAuthExpired = status === 401;
+  }
+}
+
+async function assertSheetResponse(res: Response, actionLabel: string): Promise<void> {
+  if (res.ok) return;
+  const errText = await res.text().catch(() => '');
+  if (res.status === 401) {
+    throw new SheetApiError(
+      'สิทธิ์การเชื่อมต่อ Google Sheet หมดอายุ (ครบ 1 ชั่วโมง) กรุณากดลงชื่อเข้าใช้ Google Mail ใหม่อีกครั้งเพื่อบันทึกข้อมูล',
+      401
+    );
+  }
+  if (res.status === 403) {
+    throw new SheetApiError(
+      `บัญชี Google นี้ไม่มีสิทธิ์แก้ไข (${actionLabel}) บน Google Sheet ที่ผูกไว้ กรุณาตรวจสอบสิทธิ์ Editor หรือติ๊กอนุญาตสิทธิ์ Google Sheets ให้ครบ`,
+      403
+    );
+  }
+  throw new SheetApiError(
+    `ไม่สามารถ${actionLabel}บน Google Sheet ได้ (${res.status}): ${errText || res.statusText}`,
+    res.status
+  );
+}
+
 export const BOOK_HEADERS = [
   'Code',
   'Title',
@@ -72,7 +105,7 @@ export async function createBookSwapSpreadsheet(accessToken: string): Promise<st
 
 export async function writeHeaders(accessToken: string, spreadsheetId: string): Promise<void> {
   // Write Books headers (A1:P1, 16 columns - Code is primary key, includes MatchedTransactionId)
-  await fetch(
+  const booksHeaderRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A1:P1?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
@@ -85,9 +118,10 @@ export async function writeHeaders(accessToken: string, spreadsheetId: string): 
       }),
     }
   );
+  await assertSheetResponse(booksHeaderRes, 'อัปเดตหัวตาราง Books');
 
   // Write Transactions headers (A1:K1, 11 columns - TransactionId is primary key, includes TotalBroughtCount, MatchedCount, DonatedCount, CancelledCount)
-  await fetch(
+  const txHeaderRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A1:K1?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
@@ -100,6 +134,7 @@ export async function writeHeaders(accessToken: string, spreadsheetId: string): 
       }),
     }
   );
+  await assertSheetResponse(txHeaderRes, 'อัปเดตหัวตาราง Transactions');
 }
 
 function getSafeSheetCoverValue(book: Book): string {
@@ -153,10 +188,7 @@ export async function appendBookToSheet(
     }
   );
 
-  if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    throw new Error(`ไม่สามารถบันทึกหนังสือลง Google Sheet ได้ (${res.status}): ${errText || res.statusText}`);
-  }
+  await assertSheetResponse(res, 'เพิ่มหนังสือในแท็บ Books');
 }
 
 export async function appendTransactionToSheet(
@@ -181,7 +213,7 @@ export async function appendTransactionToSheet(
     t.booksTaken.join(', '),
   ];
 
-  await fetch(
+  const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A:K:append?valueInputOption=USER_ENTERED`,
     {
       method: 'POST',
@@ -194,6 +226,8 @@ export async function appendTransactionToSheet(
       }),
     }
   );
+
+  await assertSheetResponse(res, 'บันทึกธุรกรรมในแท็บ Transactions');
 }
 
 /**
@@ -573,20 +607,17 @@ export async function syncAllBooksToSheet(
   await writeHeaders(accessToken, spreadsheetId);
 
   // Clear existing rows in Books tab to prevent leftover ghost columns from previous versions
-  try {
-    await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:Z1000:clear`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-  } catch (e) {
-    console.warn('Clear books sheet range non-fatal:', e);
-  }
+  const clearRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Books!A2:Z5000:clear`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  await assertSheetResponse(clearRes, 'เตรียมพื้นที่อัปเดตแท็บ Books');
 
   // Deduplicate by Code (Primary Key of Books)
   const uniqueBooksMap = new Map<string, Book>();
@@ -632,10 +663,7 @@ export async function syncAllBooksToSheet(
     }
   );
 
-  if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    throw new Error(`ไม่สามารถอัปเดต Google Sheet ได้ (${res.status}): ${errText || res.statusText}`);
-  }
+  await assertSheetResponse(res, 'อัปเดตข้อมูลหนังสือในแท็บ Books');
 }
 
 export async function syncAllTransactionsToSheet(
@@ -643,21 +671,34 @@ export async function syncAllTransactionsToSheet(
   spreadsheetId: string,
   transactions: TransactionRecord[]
 ): Promise<void> {
+  // Ensure headers exist first
+  const txHeaderRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A1:K1?valueInputOption=USER_ENTERED`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        values: [TRANSACTION_HEADERS],
+      }),
+    }
+  );
+  await assertSheetResponse(txHeaderRes, 'อัปเดตหัวตาราง Transactions');
+
   // Clear existing rows in Transactions tab
-  try {
-    await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A2:Z1000:clear`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-  } catch (e) {
-    console.warn('Clear transactions sheet range non-fatal:', e);
-  }
+  const clearRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A2:Z5000:clear`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  await assertSheetResponse(clearRes, 'เตรียมพื้นที่อัปเดตแท็บ Transactions');
 
   // Deduplicate transactions by TransactionId (Primary key of Transactions - ห้ามซ้ำ)
   const uniqueTxMap = new Map<string, TransactionRecord>();
@@ -693,7 +734,7 @@ export async function syncAllTransactionsToSheet(
 
   if (rows.length === 0) return;
 
-  await fetch(
+  const res = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/Transactions!A2:K${rows.length + 1}?valueInputOption=USER_ENTERED`,
     {
       method: 'PUT',
@@ -706,6 +747,8 @@ export async function syncAllTransactionsToSheet(
       }),
     }
   );
+
+  await assertSheetResponse(res, 'อัปเดตประวัติการแลกในแท็บ Transactions');
 }
 
 export const SETTINGS_HEADERS = ['Key', 'Value', 'UpdatedAt'];
