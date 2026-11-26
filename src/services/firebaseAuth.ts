@@ -14,15 +14,13 @@ const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 
 export const SCOPES = [
-  'https://www.googleapis.com/auth/spreadsheets',
   'https://www.googleapis.com/auth/drive.file',
 ];
 
 const provider = new GoogleAuthProvider();
 SCOPES.forEach((scope) => provider.addScope(scope));
 provider.setCustomParameters({
-  prompt: 'select_account consent',
-  include_granted_scopes: 'true',
+  prompt: 'select_account',
 });
 
 const OAUTH_SESSION_KEY = 'bookswap_google_oauth_session_v1';
@@ -318,8 +316,10 @@ export const googleSignIn = async (
       throw new Error('ไม่สามารถรับสิทธิ์ OAuth Access Token จาก Google ได้');
     }
 
+    // Soft-check whether this Google token has direct write access to the bound sheet
+    // (with non-sensitive drive.file scope, direct editing works for spreadsheets created by this app)
     const accessCheck = await verifySpreadsheetAccess(credential.accessToken, spreadsheetId);
-    if (!accessCheck.hasAccess) {
+    if (accessCheck.errorCode === 'TOKEN_EXPIRED') {
       await signOut(auth);
       invalidateAccessToken();
       throw new Error(
@@ -332,7 +332,7 @@ export const googleSignIn = async (
       user: result.user,
       accessToken: credential.accessToken,
       spreadsheetTitle: accessCheck.title,
-      canEdit: accessCheck.canEdit,
+      canEdit: accessCheck.hasAccess && accessCheck.canEdit,
     };
   } catch (error: any) {
     console.error('Google Sign-In Error:', error);

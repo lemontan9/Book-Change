@@ -88,7 +88,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({
               <span>ลงชื่อเข้าใช้ด้วยบัญชี Google Mail เท่านั้น</span>
             </div>
             <p className="text-[11px] text-[#6D5C50] leading-relaxed">
-              เฉพาะบัญชี Google Mail ที่มีสิทธิ์เข้าใช้งาน Google Sheet ที่ผูกกับระบบ เพื่อให้ซิงค์และอัปเดตข้อมูลหนังสืออัตโนมัติ (กรุณาติ๊กอนุญาตสิทธิ์ Google Sheets ในหน้าต่างยืนยันของ Google)
+              ลงชื่อเข้าใช้ด้วยบัญชี Google Mail เพื่อยืนยันตัวตนเจ้าหน้าที่และเชื่อมต่อข้อมูลระบบ BookSwap (ใช้สิทธิ์พื้นฐานที่ไม่ติดแจ้งเตือนแอปที่ยังไม่ยืนยัน)
             </p>
             <div className="text-[10px] text-[#4B5E26] bg-[#DCE7C4] px-2.5 py-0.5 rounded-full font-semibold inline-block border border-[#C3D3A6]">
               ตรวจสอบสิทธิ์จาก Google Sheet ที่ผูกกับระบบอัตโนมัติ
