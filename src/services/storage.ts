@@ -82,6 +82,7 @@ export const INITIAL_SETTINGS: SystemSettings = {
   showWelcomeShelf: true,
   deadStockThresholdDays: 30,
   connectedSpreadsheetId: ACTIVE_SPREADSHEET_ID,
+  appsScriptUrl: String((import.meta as any)?.env?.VITE_APPS_SCRIPT_URL || '').trim() || undefined,
 };
 
 export const INITIAL_STAFF: StaffAccount[] = [

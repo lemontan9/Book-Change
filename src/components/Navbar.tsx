@@ -74,12 +74,14 @@ export const Navbar: React.FC<NavbarProps> = ({
               onClick={() => {
                 if (googleConnected && onSyncPendingNow) {
                   onSyncPendingNow();
+                } else if (isAdminLoggedIn) {
+                  onSelectTab('settings');
                 } else {
                   onOpenAdminLogin();
                 }
               }}
               className="flex items-center gap-1.5 bg-[#FFF3CD] hover:bg-[#FFE8A3] text-[#8A4B08] border border-[#EBC76D] px-3 py-1.5 rounded-full text-xs font-semibold shadow-2xs transition-all cursor-pointer whitespace-nowrap shrink-0"
-              title="มีรายการแลกที่ค้างส่งขึ้น Google Sheet คลิกเพื่อเชื่อมต่อ Google Mail และซิงค์ทันที"
+              title="มีรายการแลกที่ค้างส่งขึ้น Google Sheet คลิกเพื่อตั้งค่าการเชื่อมต่อและซิงค์ทันที"
             >
               {isSyncingPending ? (
                 <RefreshCw className="w-3.5 h-3.5 animate-spin shrink-0" />
@@ -95,7 +97,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           ) : googleConnected ? (
             <span
               className="inline-flex items-center gap-1.5 bg-[#E8F5E9] text-[#1E5631] border border-[#C8E6C9] px-2.5 py-1 rounded-full text-[11px] font-semibold shrink-0"
-              title="เชื่อมต่อ Google Mail เรียบร้อย พร้อมบันทึกข้อมูลลง Google Sheet อัตโนมัติ"
+              title="เชื่อมต่อช่องทางบันทึกข้อมูล Google Sheet เรียบร้อย พร้อมบันทึกข้อมูล Books และ Transactions อัตโนมัติ"
             >
               <span className="w-2 h-2 rounded-full bg-[#388E3C] shrink-0" />
               <span className="hidden sm:inline">Sheet พร้อมบันทึก</span>
@@ -103,17 +105,23 @@ export const Navbar: React.FC<NavbarProps> = ({
           ) : (
             <button
               type="button"
-              onClick={onOpenAdminLogin}
+              onClick={() => {
+                if (isAdminLoggedIn) {
+                  onSelectTab('settings');
+                } else {
+                  onOpenAdminLogin();
+                }
+              }}
               className="inline-flex items-center gap-1.5 bg-[#FEF3C7] hover:bg-[#FDE68A] text-[#92400E] border border-[#F5D08A] px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors cursor-pointer shrink-0"
               title={
                 isAdminLoggedIn
-                  ? 'ยังเข้าสู่ระบบเจ้าหน้าที่อยู่ แต่สิทธิ์เขียน Google Sheet ครบ 1 ชม. หรือเพิ่งเปิดเบราว์เซอร์ใหม่ คลิกเพื่อต่ออายุสิทธิ์บันทึก'
-                  : 'ยังไม่ได้ลงชื่อเข้าใช้ Google Mail คลิกเพื่อเชื่อมต่อสิทธิ์บันทึก Google Sheet'
+                  ? 'คลิกเพื่อไปหน้าตั้งค่าระบบและวางลิงก์ Google Apps Script Web App สำหรับบันทึกข้อมูลลง Google Sheet อัตโนมัติ'
+                  : 'ยังไม่ได้ตั้งค่าลิงก์บันทึก Google Sheet คลิกเพื่อเข้าสู่ระบบเจ้าหน้าที่และตั้งค่า'
               }
             >
               <span className="w-2 h-2 rounded-full bg-[#D97706] shrink-0" />
               <span className="hidden sm:inline">
-                {isAdminLoggedIn ? 'ต่ออายุสิทธิ์บันทึก Sheet' : 'ยังไม่เชื่อมสิทธิ์บันทึก Sheet'}
+                {isAdminLoggedIn ? 'ตั้งค่าเชื่อมบันทึก Sheet' : 'ยังไม่เชื่อมสิทธิ์บันทึก Sheet'}
               </span>
             </button>
           )}

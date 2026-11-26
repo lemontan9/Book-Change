@@ -27,10 +27,137 @@ async function assertSheetResponse(res: Response, actionLabel: string): Promise<
       403
     );
   }
+  if (res.status === 404) {
+    throw new SheetApiError(
+      'ไม่พบสิทธิ์เข้าถึงไฟล์ Google Sheet เดิมผ่าน OAuth (404 — เนื่องจากระบบได้ตัดสิทธิ์ spreadsheets ออกเพื่อไม่ให้ติดหน้าจอเตือน Google) กรุณาตั้งค่า Google Apps Script Web App URL ในหน้า "ตั้งค่าระบบ" 1 ครั้งเพื่อให้บันทึกข้อมูลได้ทันทีตลอดเวลา',
+      404
+    );
+  }
   throw new SheetApiError(
     `ไม่สามารถ${actionLabel}บน Google Sheet ได้ (${res.status}): ${errText || res.statusText}`,
     res.status
   );
+}
+
+const VALID_APPS_SCRIPT_URL_REGEX = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/;
+
+export function isValidAppsScriptUrl(url?: string | null): boolean {
+  return Boolean(url && VALID_APPS_SCRIPT_URL_REGEX.test(url.trim()));
+}
+
+export function getEffectiveAppsScriptUrl(settings?: Partial<SystemSettings> | null): string {
+  const fromSettings = (settings?.appsScriptUrl || '').trim();
+  if (isValidAppsScriptUrl(fromSettings)) return fromSettings;
+  const fromEnv = String((import.meta as any)?.env?.VITE_APPS_SCRIPT_URL || '').trim();
+  if (isValidAppsScriptUrl(fromEnv)) return fromEnv;
+  return '';
+}
+
+function sanitizeBookForSheetWrite(book: Book): Book {
+  return {
+    ...book,
+    code: (book.code || '').trim().toUpperCase(),
+    coverImage: getSafeSheetCoverValue(book),
+  };
+}
+
+async function callAppsScriptBridge<T = any>(
+  webhookUrl: string,
+  payload: Record<string, any>
+): Promise<T> {
+  const cleanUrl = (webhookUrl || '').trim();
+  if (!isValidAppsScriptUrl(cleanUrl)) {
+    throw new SheetApiError(
+      'Google Apps Script Web App URL ไม่ถูกต้อง (ต้องขึ้นต้นด้วย https://script.google.com/macros/s/ และลงท้ายด้วย /exec)',
+      400
+    );
+  }
+
+  const res = await fetch('/api/sheet-write', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      webhookUrl: cleanUrl,
+      payload,
+    }),
+  });
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data || data.ok === false) {
+    throw new SheetApiError(
+      data?.error || `ไม่สามารถบันทึกข้อมูลผ่าน Apps Script Web App ได้ (HTTP ${res.status})`,
+      res.status || 500
+    );
+  }
+
+  return data as T;
+}
+
+export async function testAppsScriptConnection(
+  webhookUrl: string,
+  spreadsheetId: string
+): Promise<{ ok: boolean; title?: string; booksCount?: number; transactionsCount?: number }> {
+  return callAppsScriptBridge(webhookUrl, {
+    action: 'ping',
+    spreadsheetId,
+  });
+}
+
+export async function recordTransactionViaAppsScript(
+  webhookUrl: string,
+  spreadsheetId: string,
+  transactions: TransactionRecord[],
+  addedBooks: Book[],
+  updatedBooks: Book[]
+): Promise<void> {
+  await callAppsScriptBridge(webhookUrl, {
+    action: 'record_transaction',
+    spreadsheetId,
+    transactions,
+    addedBooks: addedBooks.map(sanitizeBookForSheetWrite),
+    updatedBooks: updatedBooks.map(sanitizeBookForSheetWrite),
+  });
+}
+
+export async function upsertBooksViaAppsScript(
+  webhookUrl: string,
+  spreadsheetId: string,
+  booksToUpsert: Book[]
+): Promise<void> {
+  if (booksToUpsert.length === 0) return;
+  await callAppsScriptBridge(webhookUrl, {
+    action: 'upsert_books',
+    spreadsheetId,
+    books: booksToUpsert.map(sanitizeBookForSheetWrite),
+  });
+}
+
+export async function syncAllViaAppsScript(
+  webhookUrl: string,
+  spreadsheetId: string,
+  books: Book[],
+  transactions: TransactionRecord[],
+  settings?: SystemSettings
+): Promise<void> {
+  await callAppsScriptBridge(webhookUrl, {
+    action: 'sync_all',
+    spreadsheetId,
+    books: books.map(sanitizeBookForSheetWrite),
+    transactions,
+    settings,
+  });
+}
+
+export async function syncSettingsViaAppsScript(
+  webhookUrl: string,
+  spreadsheetId: string,
+  settings: SystemSettings
+): Promise<void> {
+  await callAppsScriptBridge(webhookUrl, {
+    action: 'sync_settings',
+    spreadsheetId,
+    settings,
+  });
 }
 
 export const BOOK_HEADERS = [
@@ -982,6 +1109,14 @@ export async function fetchSettingsFromSheet(
         }
         break;
       }
+      case 'appsScriptUrl': {
+        const cleanedUrl = rawVal.trim();
+        if (isValidAppsScriptUrl(cleanedUrl)) {
+          patch.appsScriptUrl = cleanedUrl;
+          hasAnyKey = true;
+        }
+        break;
+      }
       default:
         break;
     }
@@ -1051,6 +1186,9 @@ export async function syncSettingsToSheet(
     ['showWelcomeShelf', String(Boolean(settings.showWelcomeShelf)), now],
     ['deadStockThresholdDays', String(Number(settings.deadStockThresholdDays) || 30), now],
   ];
+  if (settings.appsScriptUrl && isValidAppsScriptUrl(settings.appsScriptUrl)) {
+    rows.push(['appsScriptUrl', settings.appsScriptUrl.trim(), now]);
+  }
 
   const writeRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(

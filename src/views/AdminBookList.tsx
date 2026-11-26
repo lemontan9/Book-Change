@@ -14,6 +14,7 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertTriangle,
+  UploadCloud,
 } from 'lucide-react';
 import type { Book, SystemSettings, TransactionRecord } from '../types';
 import { StorageService } from '../services/storage';
@@ -24,7 +25,7 @@ interface AdminBookListProps {
   books: Book[];
   settings: SystemSettings;
   onUpdateBooks: (books: Book[]) => void;
-  onSyncToGoogle?: (updatedBooks?: Book[]) => void;
+  onSyncToGoogle?: (updatedBooks?: Book[]) => Promise<{ synced: boolean; error?: string }> | void;
   onPullFromGoogleSheet?: () => Promise<{ books: Book[]; transactions: TransactionRecord[] }>;
   onAddBookToGoogle?: (
     newBook: Book,
@@ -50,6 +51,7 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
   const [sortColumn, setSortColumn] = useState<SortColumn>('code');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [isPulling, setIsPulling] = useState<boolean>(false);
+  const [isPushing, setIsPushing] = useState<boolean>(false);
   const [isSavingBook, setIsSavingBook] = useState<boolean>(false);
   const [syncNotice, setSyncNotice] = useState<{
     type: 'success' | 'error' | 'info';
@@ -132,6 +134,36 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
     }
   };
 
+  const handlePushToGoogleSheet = async () => {
+    if (!onSyncToGoogle) return;
+    setIsPushing(true);
+    setSyncNotice(null);
+    try {
+      const res = await Promise.resolve(onSyncToGoogle(books));
+      if (res && res.synced === false) {
+        setSyncNotice({
+          type: 'error',
+          text:
+            res.error ||
+            'ยังไม่ได้ตั้งค่า Google Apps Script Web App URL ในหน้า "ตั้งค่าระบบ" กรุณาไปตั้งค่าก่อนซิงค์ขึ้น Google Sheet',
+        });
+      } else {
+        const availableCount = books.filter((b) => b.status === 'Available').length;
+        setSyncNotice({
+          type: 'success',
+          text: `Sync ข้อมูลหนังสือขึ้น Google Sheet สำเร็จ! อัปเดตทั้งหมด ${books.length.toLocaleString()} เล่ม (พร้อมแลกเปลี่ยน ${availableCount.toLocaleString()} เล่ม)`,
+        });
+      }
+    } catch (err: any) {
+      setSyncNotice({
+        type: 'error',
+        text: `ซิงค์ขึ้น Google Sheet ไม่สำเร็จ: ${err?.message || 'โปรดตรวจสอบการเชื่อมต่อ'}`,
+      });
+    } finally {
+      setIsPushing(false);
+    }
+  };
+
   const handleCreateCentralBook = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newBookTitle.trim() || isSavingBook) return;
@@ -170,12 +202,12 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
         } else if (res.reason === 'no_auth') {
           setSyncNotice({
             type: 'info',
-            text: `เพิ่มหนังสือ "${newBook.title}" (รหัส ${newBook.code}) ในเครื่องแล้ว กรุณาลงชื่อเข้าใช้ด้วย Google เพื่อให้ระบบบันทึกลง Google Sheet`,
+            text: `เพิ่มหนังสือ "${newBook.title}" (รหัส ${newBook.code}) ในเครื่องแล้ว — กรุณาตั้งค่า Apps Script Web App URL ในหน้า "ตั้งค่าระบบ" แล้วกดปุ่ม "Sync ขึ้น Google Sheet"`,
           });
         } else {
           setSyncNotice({
             type: 'error',
-            text: `เพิ่มหนังสือรหัส ${newBook.code} ในเครื่องแล้ว แต่บันทึกขึ้น Google Sheet ไม่สำเร็จ: ${res.error || 'โปรดตรวจสอบสิทธิ์การแก้ไขชีต'}`,
+            text: `เพิ่มหนังสือรหัส ${newBook.code} ในเครื่องแล้ว แต่บันทึกขึ้น Google Sheet ไม่สำเร็จ: ${res.error || 'โปรดตรวจสอบการตั้งค่า Apps Script'}`,
           });
         }
       } else if (onSyncToGoogle) {
@@ -325,11 +357,29 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
               />
             </div>
 
+            {/* Sync UP to Google Sheet Button */}
+            {onSyncToGoogle && (
+              <button
+                type="button"
+                disabled={isPushing || isPulling}
+                onClick={handlePushToGoogleSheet}
+                className="bg-[#4B5E26] hover:bg-[#3B4B1D] text-white rounded-full px-4 py-2 text-xs font-semibold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-50"
+                title="บันทึกและซิงค์รายการหนังสือที่เพิ่ม/แก้ไขขึ้น Google Sheet เพื่อให้แสดงพร้อมแลกในระบบทันที"
+              >
+                {isPushing ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <UploadCloud className="w-3.5 h-3.5" />
+                )}
+                <span>{isPushing ? 'กำลัง Sync ขึ้น Sheet...' : 'Sync ขึ้น Google Sheet'}</span>
+              </button>
+            )}
+
             {/* Sync from Google Sheet Button */}
             {onPullFromGoogleSheet && (
               <button
                 type="button"
-                disabled={isPulling}
+                disabled={isPulling || isPushing}
                 onClick={handlePullFromGoogleSheet}
                 className="bg-[#DCE7C4] hover:bg-[#CEDEB0] text-[#4B5E26] border border-[#C3D3A6] rounded-full px-4 py-2 text-xs font-semibold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 disabled:opacity-50"
                 title="ดึงข้อมูลหนังสือล่าสุดจาก Google Sheet เข้ามาแสดงในระบบ"
@@ -339,7 +389,7 @@ export const AdminBookList: React.FC<AdminBookListProps> = ({
                 ) : (
                   <DownloadCloud className="w-3.5 h-3.5 text-[#4B5E26]" />
                 )}
-                <span>{isPulling ? 'กำลัง Sync...' : 'Sync จาก Google Sheet'}</span>
+                <span>{isPulling ? 'กำลังดึง...' : 'Sync จาก Google Sheet'}</span>
               </button>
             )}
 

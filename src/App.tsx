@@ -20,6 +20,10 @@ import {
   fetchBooksFromSheet,
   fetchTransactionsFromSheet,
   fetchSettingsFromSheet,
+  getEffectiveAppsScriptUrl,
+  recordTransactionViaAppsScript,
+  upsertBooksViaAppsScript,
+  syncAllViaAppsScript,
 } from './services/googleSheets';
 import { getOrCreateBookCoversFolder, uploadCoverImageToDrive } from './services/googleDrive';
 import { Navbar } from './components/Navbar';
@@ -91,6 +95,122 @@ export default function App() {
         return { synced: true, count: 0 };
       }
 
+      const spreadsheetId = getActiveSpreadsheetId();
+      const appsScriptUrl = getEffectiveAppsScriptUrl(StorageService.getSettings());
+
+      // PATH 1 (Preferred): Write directly via Google Apps Script Web App Bridge
+      // Zero unverified-app warning, zero 404 errors on existing Sheets, zero 1-hour token expiration!
+      if (appsScriptUrl) {
+        setIsFlushingPending(true);
+        try {
+          const currentQueue = StorageService.getPendingSyncQueue();
+          const pendingCountBefore = StorageService.getPendingSyncCount();
+          const optionalToken =
+            tokenOverride !== undefined
+              ? tokenOverride
+              : googleToken || (await getAccessToken().catch(() => null));
+
+          // Optional cover upload to Drive only when a data:image cover & token exist
+          const needsDriveUpload = currentQueue.addedBooks.some(
+            (b) => b.coverImage && b.coverImage.startsWith('data:image') && !b.driveFileId
+          );
+          if (needsDriveUpload && optionalToken) {
+            try {
+              let folderId = StorageService.getSettings().connectedDriveFolderId;
+              if (!folderId) {
+                folderId = await getOrCreateBookCoversFolder(optionalToken);
+                const updated = { ...StorageService.getSettings(), connectedDriveFolderId: folderId };
+                StorageService.saveSettings(updated);
+                setSettings(updated);
+              }
+              let queueModified = false;
+              for (const b of currentQueue.addedBooks) {
+                if (b.coverImage && b.coverImage.startsWith('data:image') && !b.driveFileId) {
+                  try {
+                    const driveRes = await uploadCoverImageToDrive(
+                      optionalToken,
+                      folderId,
+                      `${b.code}_${b.title.slice(0, 20)}.jpg`,
+                      b.coverImage
+                    );
+                    b.driveFileId = driveRes.fileId;
+                    queueModified = true;
+                  } catch (e) {
+                    console.warn('Cover drive upload non-fatal:', e);
+                  }
+                }
+              }
+              if (queueModified) {
+                StorageService.savePendingSyncQueue(currentQueue);
+              }
+            } catch (driveErr) {
+              console.warn('Optional Drive cover upload skipped:', driveErr);
+            }
+          }
+
+          await recordTransactionViaAppsScript(
+            appsScriptUrl,
+            spreadsheetId,
+            currentQueue.transactions,
+            currentQueue.addedBooks,
+            currentQueue.updatedBooks
+          );
+
+          // Confirmed saved on Google Sheet -> clear pending queue and pull freshest merged state
+          StorageService.clearPendingSyncQueue();
+          setPendingSyncCount(0);
+
+          try {
+            const [freshBooks, freshTx] = await Promise.all([
+              fetchBooksFromSheet(null, spreadsheetId),
+              fetchTransactionsFromSheet(null, spreadsheetId).catch(() => StorageService.getTransactions()),
+            ]);
+            const sortedBooks = StorageService.sortBooks(freshBooks);
+            StorageService.saveBooks(sortedBooks);
+            StorageService.syncUsedCodesFromBooks(sortedBooks);
+            StorageService.saveTransactions(freshTx);
+            setBooks(sortedBooks);
+            setTransactions(freshTx);
+          } catch (refreshErr) {
+            console.warn('Post-AppsScript refresh non-fatal:', refreshErr);
+          }
+
+          const finalSettings: SystemSettings = {
+            ...StorageService.getSettings(),
+            connectedSpreadsheetId: spreadsheetId,
+            lastSyncTime: new Date().toISOString(),
+          };
+          StorageService.saveSettings(finalSettings);
+          setSettings(finalSettings);
+
+          setSyncBanner({
+            type: 'success',
+            text: `บันทึกข้อมูลขึ้น Google Sheet (Books และ Transactions) สำเร็จแล้ว (${pendingCountBefore} รายการ)`,
+          });
+          setTimeout(() => {
+            setSyncBanner((prev) => (prev?.type === 'success' ? null : prev));
+          }, 6000);
+
+          return { synced: true, count: pendingCountBefore };
+        } catch (err: any) {
+          console.error('Apps Script pending-queue flush failed:', err);
+          const friendlyError =
+            err?.message ||
+            'ไม่สามารถส่งข้อมูลขึ้น Google Sheet ผ่าน Apps Script ได้ (ข้อมูลยังถูกสำรองไว้ในเครื่องอย่างปลอดภัย)';
+          StorageService.setPendingSyncError(friendlyError);
+          const remaining = StorageService.getPendingSyncCount();
+          setPendingSyncCount(remaining);
+          setSyncBanner({
+            type: 'error',
+            text: `${friendlyError} (ค้างส่ง ${remaining} รายการ)`,
+          });
+          return { synced: false, count: remaining, reason: 'error', error: friendlyError };
+        } finally {
+          setIsFlushingPending(false);
+        }
+      }
+
+      // PATH 2 (Fallback): OAuth Sheets API (for sheets created by this app with drive.file)
       const token =
         tokenOverride !== undefined
           ? tokenOverride
@@ -99,7 +219,7 @@ export default function App() {
       if (!token) {
         const count = StorageService.getPendingSyncCount();
         const msg =
-          'ยังไม่ได้ลงชื่อเข้าใช้ Google Mail (หรือสิทธิ์ครบ 1 ชม.) — ข้อมูลถูกสำรองไว้ในเครื่องอย่างปลอดภัยแล้ว กรุณากดลงชื่อเข้าใช้ Google Mail เพื่อส่งข้อมูลขึ้น Google Sheet';
+          'ยังไม่ได้ตั้งค่า Google Apps Script Web App URL ในหน้า "ตั้งค่าระบบ" (หรือยังไม่ได้ลงชื่อเข้าใช้ Google Mail) — ข้อมูลถูกสำรองไว้ในเครื่องอย่างปลอดภัยแล้ว';
         StorageService.setPendingSyncError(msg);
         setPendingSyncCount(count);
         setSyncBanner({ type: 'warning', text: msg });
@@ -108,7 +228,7 @@ export default function App() {
 
       setIsFlushingPending(true);
       try {
-        let spreadsheetId = getActiveSpreadsheetId();
+        let targetSpreadsheetId = spreadsheetId;
         let folderId = StorageService.getSettings().connectedDriveFolderId;
 
         const currentQueue = StorageService.getPendingSyncQueue();
@@ -117,14 +237,14 @@ export default function App() {
           (b) => b.coverImage && b.coverImage.startsWith('data:image') && !b.driveFileId
         );
 
-        if (!spreadsheetId) {
-          spreadsheetId = await createBookSwapSpreadsheet(token);
+        if (!targetSpreadsheetId) {
+          targetSpreadsheetId = await createBookSwapSpreadsheet(token);
           if (needsDriveUpload) {
             folderId = await getOrCreateBookCoversFolder(token);
           }
           const updated = {
             ...StorageService.getSettings(),
-            connectedSpreadsheetId: spreadsheetId,
+            connectedSpreadsheetId: targetSpreadsheetId,
             connectedDriveFolderId: folderId,
           };
           StorageService.saveSettings(updated);
@@ -166,8 +286,8 @@ export default function App() {
 
         // 2. Fetch latest remote Books & Transactions first (strictAuth=true fails fast on expired 401/403 token)
         const [remoteBooks, remoteTx] = await Promise.all([
-          fetchBooksFromSheet(token, spreadsheetId, true),
-          fetchTransactionsFromSheet(token, spreadsheetId, true),
+          fetchBooksFromSheet(token, targetSpreadsheetId, true),
+          fetchTransactionsFromSheet(token, targetSpreadsheetId, true),
         ]);
 
         const mergedBooks = StorageService.mergeRemoteBooksWithPending(remoteBooks);
@@ -186,14 +306,14 @@ export default function App() {
           writePromises.push(
             appendTransactionsToSheet(
               token,
-              spreadsheetId,
+              targetSpreadsheetId,
               newTransactionsToAppend,
               remoteTx.length === 0
             )
           );
         }
         if (currentQueue.addedBooks.length > 0 || currentQueue.updatedBooks.length > 0) {
-          writePromises.push(syncAllBooksToSheet(token, spreadsheetId, mergedBooks));
+          writePromises.push(syncAllBooksToSheet(token, targetSpreadsheetId, mergedBooks));
         }
         await Promise.all(writePromises);
 
@@ -209,7 +329,7 @@ export default function App() {
 
         const finalSettings: SystemSettings = {
           ...StorageService.getSettings(),
-          connectedSpreadsheetId: spreadsheetId,
+          connectedSpreadsheetId: targetSpreadsheetId,
           connectedDriveFolderId: folderId,
           lastSyncTime: new Date().toISOString(),
         };
@@ -309,10 +429,11 @@ export default function App() {
     if (pendingSyncRef.current) {
       await pendingSyncRef.current.catch(() => {});
     }
-    // If there are pending unsynced items and we have a token, flush first so Sheet is 100% up-to-date
+    // If there are pending unsynced items and Apps Script URL or token is available, flush first so Sheet is 100% up-to-date
     if (StorageService.hasPendingSync()) {
+      const hasAppsScript = Boolean(getEffectiveAppsScriptUrl(StorageService.getSettings()));
       const liveToken = googleToken || (await getAccessToken().catch(() => null));
-      if (liveToken) {
+      if (hasAppsScript || liveToken) {
         await flushPendingSyncToGoogleSheet(liveToken);
       }
     }
@@ -343,17 +464,13 @@ export default function App() {
       updatedBooks: Book[]
     ): Promise<{ synced: boolean; reason?: 'no_auth' | 'error'; error?: string }> => {
       try {
-        const token = googleToken || (await getAccessToken().catch(() => null));
-        if (!token) {
-          setIsLoginModalOpen(true);
-          return { synced: false, reason: 'no_auth' };
-        }
-
         const targetId = getActiveSpreadsheetId();
+        const appsScriptUrl = getEffectiveAppsScriptUrl(StorageService.getSettings());
+        const token = googleToken || (await getAccessToken().catch(() => null));
         const bookToAppend: Book = { ...newBook };
 
-        // Upload cover image to Google Drive if provided as data URL so the sheet cell stays lightweight
-        if (bookToAppend.coverImage && bookToAppend.coverImage.startsWith('data:image')) {
+        // Optional: Upload cover image to Google Drive if data URL and token available
+        if (bookToAppend.coverImage && bookToAppend.coverImage.startsWith('data:image') && token) {
           try {
             let folderId = settings.connectedDriveFolderId;
             if (!folderId) {
@@ -374,10 +491,39 @@ export default function App() {
           }
         }
 
-        // Immediately append the new book row to Google Sheet
+        // PATH 1 (Preferred): Immediately upsert book into Google Sheet via Apps Script Web App
+        if (appsScriptUrl) {
+          await upsertBooksViaAppsScript(appsScriptUrl, targetId, [bookToAppend]);
+
+          if (bookToAppend.driveFileId) {
+            const withDrive = updatedBooks.map((b) =>
+              b.id === bookToAppend.id ? { ...b, driveFileId: bookToAppend.driveFileId } : b
+            );
+            StorageService.saveBooks(withDrive);
+            setBooks(withDrive);
+          }
+
+          const finalSettings: SystemSettings = {
+            ...StorageService.getSettings(),
+            lastSyncTime: new Date().toISOString(),
+          };
+          StorageService.saveSettings(finalSettings);
+          setSettings(finalSettings);
+
+          return { synced: true };
+        }
+
+        // PATH 2 (Fallback): OAuth Sheets API
+        if (!token) {
+          return {
+            synced: false,
+            reason: 'no_auth',
+            error: 'ยังไม่ได้ตั้งค่า Google Apps Script Web App URL ในหน้า "ตั้งค่าระบบ"',
+          };
+        }
+
         await appendBookToSheet(token, targetId, bookToAppend);
 
-        // Save driveFileId locally if uploaded
         if (bookToAppend.driveFileId) {
           const withDrive = updatedBooks.map((b) =>
             b.id === bookToAppend.id ? { ...b, driveFileId: bookToAppend.driveFileId } : b
@@ -529,6 +675,8 @@ export default function App() {
     setKioskKey((prev) => prev + 1);
   };
 
+  const isSheetWriteReady = Boolean(getEffectiveAppsScriptUrl(settings) || googleToken);
+
   return (
     <div
       className="min-h-screen bg-[#FAF3E6] text-[#3A2D26] flex flex-col font-sans select-none bg-cover bg-bottom bg-no-repeat bg-fixed"
@@ -542,9 +690,15 @@ export default function App() {
         onGoHome={handleGoHome}
         isAdminLoggedIn={isAdminLoggedIn}
         adminUsername={adminUsername}
-        onOpenAdminLogin={() => setIsLoginModalOpen(true)}
+        onOpenAdminLogin={() => {
+          if (isAdminLoggedIn && !isSheetWriteReady) {
+            setCurrentTab('settings');
+          } else {
+            setIsLoginModalOpen(true);
+          }
+        }}
         onAdminLogout={handleAdminLogout}
-        googleConnected={Boolean(googleToken)}
+        googleConnected={isSheetWriteReady}
         pendingSyncCount={pendingSyncCount}
         isSyncingPending={isFlushingPending}
         onSyncPendingNow={() => {
@@ -582,8 +736,10 @@ export default function App() {
                   type="button"
                   disabled={isFlushingPending}
                   onClick={() => {
-                    if (googleToken) {
+                    if (isSheetWriteReady) {
                       flushPendingSyncToGoogleSheet();
+                    } else if (isAdminLoggedIn) {
+                      setCurrentTab('settings');
                     } else {
                       stayOnKioskAfterLoginRef.current = currentTab === 'kiosk';
                       setIsLoginModalOpen(true);
@@ -599,22 +755,28 @@ export default function App() {
                   <span>
                     {isFlushingPending
                       ? 'กำลังส่งข้อมูล...'
-                      : googleToken
+                      : isSheetWriteReady
                         ? `ส่งขึ้น Google Sheet ทันที (${pendingSyncCount})`
-                        : 'เชื่อม Google Mail เพื่อส่งข้อมูล'}
+                        : isAdminLoggedIn
+                          ? 'ตั้งค่า Apps Script ในหน้าตั้งค่าระบบ'
+                          : 'เข้าสู่ระบบเจ้าหน้าที่เพื่อตั้งค่า Sheet'}
                   </span>
                 </button>
               )}
-              {!googleToken && pendingSyncCount === 0 && syncBanner?.type !== 'success' && (
+              {!isSheetWriteReady && pendingSyncCount === 0 && syncBanner?.type !== 'success' && (
                 <button
                   type="button"
                   onClick={() => {
-                    stayOnKioskAfterLoginRef.current = currentTab === 'kiosk';
-                    setIsLoginModalOpen(true);
+                    if (isAdminLoggedIn) {
+                      setCurrentTab('settings');
+                    } else {
+                      stayOnKioskAfterLoginRef.current = currentTab === 'kiosk';
+                      setIsLoginModalOpen(true);
+                    }
                   }}
                   className="inline-flex items-center gap-1.5 bg-[#7D502E] hover:bg-[#653F22] text-white px-3.5 py-1.5 rounded-full text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap"
                 >
-                  <span>ลงชื่อเข้าใช้ Google Mail</span>
+                  <span>{isAdminLoggedIn ? 'ไปหน้าตั้งค่า Apps Script' : 'ลงชื่อเข้าใช้ Google Mail'}</span>
                 </button>
               )}
               {pendingSyncCount === 0 && (
@@ -640,11 +802,15 @@ export default function App() {
             books={books}
             onTransactionComplete={handleTransactionComplete}
             onOpenAdminLogin={() => {
-              stayOnKioskAfterLoginRef.current = true;
-              setIsLoginModalOpen(true);
+              if (isAdminLoggedIn && !isSheetWriteReady) {
+                setCurrentTab('settings');
+              } else {
+                stayOnKioskAfterLoginRef.current = true;
+                setIsLoginModalOpen(true);
+              }
             }}
             onRefreshBooks={handleRefreshBooksBeforeKioskAssign}
-            googleConnected={Boolean(googleToken)}
+            googleConnected={isSheetWriteReady}
             pendingSyncCount={pendingSyncCount}
             isSyncingPending={isFlushingPending}
             onRetrySync={() => flushPendingSyncToGoogleSheet()}
@@ -660,28 +826,44 @@ export default function App() {
             onAddBookToGoogle={handleAddBookToGoogle}
             onSyncToGoogle={async (updatedBooks?: Book[]) => {
               try {
-                const token = googleToken || (await getAccessToken());
                 const targetId = getActiveSpreadsheetId();
                 const list = updatedBooks || books;
+                const allTx = StorageService.getTransactions();
+                const appsScriptUrl = getEffectiveAppsScriptUrl(StorageService.getSettings());
+
+                if (appsScriptUrl) {
+                  await syncAllViaAppsScript(appsScriptUrl, targetId, list, allTx);
+                  StorageService.clearPendingSyncQueue();
+                  setPendingSyncCount(0);
+                  await pullFromGoogleSheet();
+                  return { synced: true };
+                }
+
+                const token = googleToken || (await getAccessToken());
                 if (!token) {
-                  setIsLoginModalOpen(true);
-                  return;
+                  return {
+                    synced: false,
+                    error: 'กรุณาตั้งค่า Google Apps Script Web App URL ในหน้า "ตั้งค่าระบบ" ก่อนซิงค์ขึ้น Google Sheet',
+                  };
                 }
                 await syncAllBooksToSheet(token, targetId, list);
-                const allTx = StorageService.getTransactions();
                 await syncAllTransactionsToSheet(token, targetId, allTx);
                 StorageService.clearPendingSyncQueue();
                 setPendingSyncCount(0);
+                await pullFromGoogleSheet(token);
+                return { synced: true };
               } catch (e: any) {
                 if (e instanceof SheetApiError && e.isAuthExpired) {
                   invalidateAccessToken();
                   setGoogleToken(null);
                 }
                 console.error('Google Sheets auto-sync error:', e);
+                const msg = e?.message || 'เกิดข้อผิดพลาดในการซิงค์ขึ้น Google Sheet';
                 setSyncBanner({
                   type: 'error',
-                  text: e?.message || 'เกิดข้อผิดพลาดในการซิงค์ขึ้น Google Sheet',
+                  text: msg,
                 });
+                return { synced: false, error: msg };
               }
             }}
             onSelectTab={handleSelectTab}
@@ -693,8 +875,14 @@ export default function App() {
             books={books}
             settings={settings}
             transactions={transactions}
-            googleConnected={Boolean(googleToken)}
-            onConnectGoogle={() => setIsLoginModalOpen(true)}
+            googleConnected={isSheetWriteReady}
+            onConnectGoogle={() => {
+              if (isAdminLoggedIn && !isSheetWriteReady) {
+                setCurrentTab('settings');
+              } else {
+                setIsLoginModalOpen(true);
+              }
+            }}
             onFlushPendingSync={() => flushPendingSyncToGoogleSheet()}
             onSelectTab={handleSelectTab}
             onOpenAddBook={() => setCurrentTab('books')}
@@ -727,6 +915,7 @@ export default function App() {
             googleConnected={Boolean(googleToken)}
             googleUser={googleUser}
             onConnectGoogle={() => setIsLoginModalOpen(true)}
+            onFlushPendingSync={() => flushPendingSyncToGoogleSheet()}
             onSelectTab={handleSelectTab}
             onOpenAddBook={() => setCurrentTab('books')}
           />

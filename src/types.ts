@@ -86,6 +86,7 @@ export interface SystemSettings {
   deadStockThresholdDays: number;
   connectedSpreadsheetId?: string;
   connectedDriveFolderId?: string;
+  appsScriptUrl?: string;
   lastSyncTime?: string;
 }
 

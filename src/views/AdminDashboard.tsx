@@ -20,6 +20,8 @@ import {
   fetchSettingsFromSheet,
   syncAllBooksToSheet,
   syncAllTransactionsToSheet,
+  getEffectiveAppsScriptUrl,
+  syncAllViaAppsScript,
 } from '../services/googleSheets';
 import { StorageService, normalizeCategory } from '../services/storage';
 import { getAccessToken } from '../services/firebaseAuth';
@@ -196,29 +198,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsSyncing(true);
     setSyncNotice(null);
     try {
-      const token = await getAccessToken();
-      if (!token) {
+      const appsScriptUrl = getEffectiveAppsScriptUrl(StorageService.getSettings());
+      const token = await getAccessToken().catch(() => null);
+
+      if (!appsScriptUrl && !token) {
         if (onConnectGoogle) {
           onConnectGoogle();
         }
         setSyncNotice({
           type: 'info',
-          text: 'กรุณาลงชื่อเข้าใช้ด้วยบัญชี Google ที่มีสิทธิ์เข้าถึง (Editor) บน Google Sheet ที่ผูกกับระบบ เพื่ออนุญาตให้ระบบส่งข้อมูลขึ้น Google Sheet',
+          text: 'กรุณาตั้งค่า Google Apps Script Web App URL ในหน้า "ตั้งค่าระบบ" 1 ครั้ง เพื่อให้ระบบส่งข้อมูลขึ้น Google Sheet ได้ทันที',
         });
         return;
       }
 
       // Merge latest remote Google Sheet rows with pending local records before writing so nothing is overwritten
       const [remoteBooks, remoteTx] = await Promise.all([
-        fetchBooksFromSheet(token, spreadsheetId),
-        fetchTransactionsFromSheet(token, spreadsheetId).catch(() => []),
+        fetchBooksFromSheet(appsScriptUrl ? null : token, spreadsheetId),
+        fetchTransactionsFromSheet(appsScriptUrl ? null : token, spreadsheetId).catch(() => []),
       ]);
       StorageService.adoptLegacyUnsyncedLocalData(remoteBooks, remoteTx);
       const mergedBooks = StorageService.mergeRemoteBooksWithPending(remoteBooks);
       const mergedTx = StorageService.mergeRemoteTransactionsWithPending(remoteTx);
 
-      await syncAllBooksToSheet(token, spreadsheetId, mergedBooks);
-      await syncAllTransactionsToSheet(token, spreadsheetId, mergedTx);
+      if (appsScriptUrl) {
+        await syncAllViaAppsScript(appsScriptUrl, spreadsheetId, mergedBooks, mergedTx);
+      } else if (token) {
+        await syncAllBooksToSheet(token, spreadsheetId, mergedBooks);
+        await syncAllTransactionsToSheet(token, spreadsheetId, mergedTx);
+      }
 
       StorageService.clearPendingSyncQueue();
       StorageService.saveBooks(mergedBooks);
