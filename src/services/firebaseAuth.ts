@@ -5,6 +5,8 @@ import {
   GoogleAuthProvider,
   onAuthStateChanged,
   signOut,
+  setPersistence,
+  browserLocalPersistence,
   type User,
 } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -12,6 +14,11 @@ import { ACTIVE_SPREADSHEET_ID, StorageService } from './storage';
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
+
+// Explicitly persist Firebase Auth session in browser local storage until manual logout
+const persistenceReady = setPersistence(auth, browserLocalPersistence).catch((err) => {
+  console.warn('Firebase browserLocalPersistence setup non-fatal:', err);
+});
 
 export const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
@@ -24,8 +31,54 @@ provider.setCustomParameters({
 });
 
 const OAUTH_SESSION_KEY = 'bookswap_google_oauth_session_v1';
+const STAFF_PROFILE_KEY = 'bookswap_staff_session_v1';
 // Google OAuth access tokens expire after 60 minutes; treat as expired at 55 minutes for safety
 const TOKEN_TTL_MS = 55 * 60 * 1000;
+
+export interface SavedStaffSession {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+  signedInAt: string;
+}
+
+export function getSavedStaffSession(): SavedStaffSession | null {
+  try {
+    const raw = localStorage.getItem(STAFF_PROFILE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.uid === 'string' && parsed.uid.length > 0) {
+      return parsed as SavedStaffSession;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return null;
+}
+
+function saveStaffSession(user: User): void {
+  try {
+    const payload: SavedStaffSession = {
+      uid: user.uid,
+      email: user.email,
+      displayName: user.displayName,
+      photoURL: user.photoURL,
+      signedInAt: new Date().toISOString(),
+    };
+    localStorage.setItem(STAFF_PROFILE_KEY, JSON.stringify(payload));
+  } catch {
+    // ignore storage quota errors
+  }
+}
+
+function clearStaffSession(): void {
+  try {
+    localStorage.removeItem(STAFF_PROFILE_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
@@ -260,19 +313,17 @@ export async function verifySpreadsheetAccess(
 }
 
 export const initAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
+  onAuthSuccess?: (user: User, token: string | null) => void,
   onAuthFailure?: () => void
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
+      saveStaffSession(user);
       const session = loadSessionToken();
-      if (session?.token) {
-        if (onAuthSuccess) onAuthSuccess(user, session.token);
-      } else if (!isSigningIn) {
-        invalidateAccessToken();
-        if (onAuthFailure) onAuthFailure();
-      }
-    } else {
+      // Always restore Staff login session while Firebase user remains signed in (persisted until explicit logout)
+      if (onAuthSuccess) onAuthSuccess(user, session?.token ?? null);
+    } else if (!isSigningIn) {
+      clearStaffSession();
       invalidateAccessToken();
       if (onAuthFailure) onAuthFailure();
     }
@@ -306,12 +357,15 @@ export const googleSignIn = async (
 ): Promise<{ user: User; accessToken: string; spreadsheetTitle?: string; canEdit?: boolean } | null> => {
   try {
     isSigningIn = true;
+    await persistenceReady;
+    await setPersistence(auth, browserLocalPersistence);
     const result = await signInWithPopup(auth, provider);
     const email = result.user.email?.toLowerCase().trim();
 
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       await signOut(auth);
+      clearStaffSession();
       invalidateAccessToken();
       throw new Error('ไม่สามารถรับสิทธิ์ OAuth Access Token จาก Google ได้');
     }
@@ -321,12 +375,14 @@ export const googleSignIn = async (
     const accessCheck = await verifySpreadsheetAccess(credential.accessToken, spreadsheetId);
     if (accessCheck.errorCode === 'TOKEN_EXPIRED') {
       await signOut(auth);
+      clearStaffSession();
       invalidateAccessToken();
       throw new Error(
         `${accessCheck.reason} (บัญชีที่คุณใช้คือ ${email || 'ไม่ระบุ'})`
       );
     }
 
+    saveStaffSession(result.user);
     saveSessionToken(credential.accessToken, email);
     return {
       user: result.user,
@@ -349,6 +405,7 @@ export const getAccessToken = async (): Promise<string | null> => {
 };
 
 export const logout = async () => {
-  await signOut(auth);
+  clearStaffSession();
   invalidateAccessToken();
+  await signOut(auth);
 };

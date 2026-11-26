@@ -8,6 +8,7 @@ import {
   getAccessToken,
   invalidateAccessToken,
   getTokenExpiresAt,
+  getSavedStaffSession,
 } from './services/firebaseAuth';
 import {
   SheetApiError,
@@ -37,13 +38,18 @@ export default function App() {
   const [settings, setSettings] = useState<SystemSettings>(StorageService.getSettings());
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
 
-  // Auth State
-  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(false);
-  const [adminUsername, setAdminUsername] = useState<string | null>(null);
+  // Auth State (restored synchronously from persisted staff session so login stays remembered until manual logout)
+  const [initialStaffSession] = useState(() => getSavedStaffSession());
+  const [isAdminLoggedIn, setIsAdminLoggedIn] = useState<boolean>(() =>
+    Boolean(initialStaffSession)
+  );
+  const [adminUsername, setAdminUsername] = useState<string | null>(
+    () => initialStaffSession?.email || initialStaffSession?.displayName || null
+  );
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
 
   // Google Workspace state
-  const [googleUser, setGoogleUser] = useState<any | null>(null);
+  const [googleUser, setGoogleUser] = useState<any | null>(() => initialStaffSession);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
 
   // Persistent Pending Sync state (guarantees zero data loss even if token expires after 1 hr or browser refreshes)
@@ -414,7 +420,7 @@ export default function App() {
     // Immediately pull live Google Sheet (safely preserving any pending unsynced local queue)
     refreshFromGoogleSheet(null);
 
-    // Initialize Firebase Auth listener (restores unexpired sessionStorage OAuth token across F5 refresh)
+    // Initialize Firebase Auth listener (keeps staff logged in persistently across browser restarts until explicit logout)
     const unsubscribe = initAuth(
       (user, token) => {
         setGoogleUser(user);
@@ -423,6 +429,8 @@ export default function App() {
         setAdminUsername(user.email || user.displayName || 'Google Staff');
       },
       () => {
+        setIsAdminLoggedIn(false);
+        setAdminUsername(null);
         setGoogleUser(null);
         setGoogleToken(null);
       }

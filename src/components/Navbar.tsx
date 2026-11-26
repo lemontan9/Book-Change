@@ -105,10 +105,16 @@ export const Navbar: React.FC<NavbarProps> = ({
               type="button"
               onClick={onOpenAdminLogin}
               className="inline-flex items-center gap-1.5 bg-[#FEF3C7] hover:bg-[#FDE68A] text-[#92400E] border border-[#F5D08A] px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors cursor-pointer shrink-0"
-              title="ยังไม่ได้ลงชื่อเข้าใช้ Google Mail (หรือสิทธิ์ครบ 1 ชม.) คลิกเพื่อเชื่อมต่อสิทธิ์บันทึก Google Sheet"
+              title={
+                isAdminLoggedIn
+                  ? 'ยังเข้าสู่ระบบเจ้าหน้าที่อยู่ แต่สิทธิ์เขียน Google Sheet ครบ 1 ชม. หรือเพิ่งเปิดเบราว์เซอร์ใหม่ คลิกเพื่อต่ออายุสิทธิ์บันทึก'
+                  : 'ยังไม่ได้ลงชื่อเข้าใช้ Google Mail คลิกเพื่อเชื่อมต่อสิทธิ์บันทึก Google Sheet'
+              }
             >
               <span className="w-2 h-2 rounded-full bg-[#D97706] shrink-0" />
-              <span className="hidden sm:inline">ยังไม่เชื่อมสิทธิ์บันทึก Sheet</span>
+              <span className="hidden sm:inline">
+                {isAdminLoggedIn ? 'ต่ออายุสิทธิ์บันทึก Sheet' : 'ยังไม่เชื่อมสิทธิ์บันทึก Sheet'}
+              </span>
             </button>
           )}
 
@@ -137,9 +143,12 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
 
           {isAdminLoggedIn ? (
-            <div className="flex items-center gap-1.5 bg-[#F3E7D3] px-3.5 py-1.5 rounded-full text-xs font-semibold text-[#5C3A21] border border-[#E0CEB5] shadow-2xs">
+            <div
+              className="flex items-center gap-1.5 bg-[#F3E7D3] px-3.5 py-1.5 rounded-full text-xs font-semibold text-[#5C3A21] border border-[#E0CEB5] shadow-2xs"
+              title={adminUsername ? `เข้าสู่ระบบในชื่อ ${adminUsername} (จดจำการเข้าสู่ระบบจนกว่าจะกดออกจากระบบ)` : 'Staff'}
+            >
               <ShieldCheck className="w-3.5 h-3.5 text-[#5C3A21] shrink-0" />
-              <span>Staff</span>
+              <span className="max-w-[120px] truncate">{adminUsername ? adminUsername.split('@')[0] : 'Staff'}</span>
               <button
                 type="button"
                 onClick={onAdminLogout}
