@@ -38,9 +38,6 @@ import {
   Step3LeftBookStackIllustration,
   Step3RightOpenBookIllustration,
   Step3CardMiniBookIllustration,
-  Step4StickerBookSceneIllustration,
-  Step4MiniOpenBookIllustration,
-  Step5BookSearchMascotIllustration,
   Step6LeftBookPlantIllustration,
   Step6RightHeartMascotIllustration,
 } from '../components/EcoIllustrations';
@@ -153,7 +150,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
     }
   };
 
-  // Initialize book entries when entering step 3 and reconcile codes with freshest Google Sheet Books
+  // Initialize book entries when entering step 3 and reconcile codes + available shelf with freshest Google Sheet Books
   useEffect(() => {
     if (step !== 3) return;
     let cancelled = false;
@@ -163,6 +160,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
     }
 
     if (onRefreshBooks) {
+      setIsRefreshingStep5Books(true);
       onRefreshBooks()
         .then((latestBooks) => {
           if (cancelled) return;
@@ -188,7 +186,12 @@ export const KioskView: React.FC<KioskViewProps> = ({
             }));
           });
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          if (!cancelled) {
+            setIsRefreshingStep5Books(false);
+          }
+        });
     }
 
     return () => {
@@ -196,7 +199,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
     };
   }, [step]);
 
-  // Helper to pull freshest live books from Google Sheet for Step 5 matching & shelf search
+  // Helper to pull freshest live books from Google Sheet for matching & shelf search
   const refreshStep5LiveBooks = React.useCallback(async () => {
     if (!onRefreshBooks) return;
     setIsRefreshingStep5Books(true);
@@ -209,15 +212,9 @@ export const KioskView: React.FC<KioskViewProps> = ({
     }
   }, [onRefreshBooks]);
 
-  // Pull latest live books from Google Sheet immediately whenever entering Step 5
+  // If user connects Sheet sync while on Step 4 (completion receipt) and pending queue clears, reflect synced status immediately
   useEffect(() => {
-    if (step !== 5) return;
-    refreshStep5LiveBooks();
-  }, [step, refreshStep5LiveBooks]);
-
-  // If user connects Google Mail while on Step 6 and pending queue clears, reflect synced status immediately
-  useEffect(() => {
-    if (step === 6 && completedTransaction && !completedTransaction.syncResult?.synced && pendingSyncCount === 0 && googleConnected) {
+    if (step === 4 && completedTransaction && !completedTransaction.syncResult?.synced && pendingSyncCount === 0 && googleConnected) {
       setCompletedTransaction((prev) =>
         prev ? { ...prev, syncResult: { synced: true } } : prev
       );
@@ -317,10 +314,11 @@ export const KioskView: React.FC<KioskViewProps> = ({
     return Object.keys(errors).length === 0;
   };
 
-  // Step 3 validation
+  // Step 3 validation (book details)
   const validateBooksBrought = (): boolean => {
     const errors: Record<number, string> = {};
     bookEntries.forEach((entry, idx) => {
+      if (entry.isCancelled) return;
       if (!entry.title.trim()) {
         errors[idx] = `กรุณากรอกชื่อเรื่องของเล่มที่ ${idx + 1}`;
       } else if (entry.price === undefined || entry.price === null || isNaN(entry.price) || Number(entry.price) <= 0) {
@@ -418,6 +416,11 @@ export const KioskView: React.FC<KioskViewProps> = ({
       delete copy[idx];
       return copy;
     });
+    setBookValidationErrors((prev) => {
+      const copy = { ...prev };
+      delete copy[idx];
+      return copy;
+    });
   };
 
   const validateAllMatches = (): boolean => {
@@ -455,7 +458,9 @@ export const KioskView: React.FC<KioskViewProps> = ({
 
   const handleConfirmExchange = async () => {
     if (isSubmittingExchange) return;
-    if (!validateAllMatches()) return;
+    const booksValid = validateBooksBrought();
+    const matchesValid = validateAllMatches();
+    if (!booksValid || !matchesValid) return;
 
     setIsSubmittingExchange(true);
     try {
@@ -621,7 +626,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
         syncResult: syncResult || undefined,
       });
 
-      setStep(6);
+      setStep(4);
       confetti({
         particleCount: 80,
         spread: 70,
@@ -740,10 +745,8 @@ export const KioskView: React.FC<KioskViewProps> = ({
   const stepsList = [
     { num: 1, label: 'เงื่อนไข' },
     { num: 2, label: 'ข้อมูลผู้ร่วม' },
-    { num: 3, label: 'หนังสือ' },
-    { num: 4, label: 'ติดเลข' },
-    { num: 5, label: 'จับคู่' },
-    { num: 6, label: 'สิ้นสุด' },
+    { num: 3, label: 'หนังสือ & จับคู่' },
+    { num: 4, label: 'สิ้นสุด' },
   ];
 
   const renderBackButton = () => (
@@ -763,8 +766,8 @@ export const KioskView: React.FC<KioskViewProps> = ({
       <div
         className="w-full max-w-6xl bg-[#FFFCF7]/95 backdrop-blur-sm rounded-[28px] sm:rounded-[34px] shadow-[0_18px_48px_rgba(92,58,33,0.09)] border border-[#EAE0D2] p-5 sm:p-8 lg:p-10 transition-all"
       >
-        {/* Step Indicator Header (Steps 1 to 6) */}
-        {step >= 1 && step <= 6 && (
+        {/* Step Indicator Header (Steps 1 to 4) */}
+        {step >= 1 && step <= 4 && (
           <div className="-mt-[20px] mb-7 bg-[#FFFDF9]/95 border border-[#EAE0D2] rounded-[24px] px-4 sm:px-8 py-4 shadow-[0_6px_20px_rgba(92,58,33,0.05)] relative overflow-visible">
             {/* Subtle Golden 4-point Sparkles on Top Left */}
             <svg
@@ -782,7 +785,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
                 <div
                   className="h-full bg-[#6A8852] transition-all duration-300 rounded-full"
                   style={{
-                    width: `${((Math.min(step, 6) - 1) / 5) * 100}%`,
+                    width: `${((Math.min(step, 4) - 1) / 3) * 100}%`,
                   }}
                 />
               </div>
@@ -1339,15 +1342,25 @@ export const KioskView: React.FC<KioskViewProps> = ({
                   </span>
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {(settings.memberTypes && settings.memberTypes.length > 0
-                    ? settings.memberTypes
-                    : [
-                        'CMU นักศึกษา',
-                        'CMU Staff',
-                        'CMU ศิษย์เก่า',
-                        'บุคคลทั่วไป/นักเรียน',
-                      ]
-                  ).map((type, idx) => {
+                  {(() => {
+                    const baseTypes =
+                      settings.memberTypes && settings.memberTypes.length > 0
+                        ? [...settings.memberTypes]
+                        : [
+                            'CMU นักศึกษา',
+                            'CMU Staff',
+                            'CMU ศิษย์เก่า',
+                            'บุคคลทั่วไป/นักเรียน',
+                          ];
+                    const getRank = (t: string): number => {
+                      if (t.includes('นักศึกษา')) return 0;
+                      if (t.toLowerCase().includes('staff') || t.includes('บุคลากร')) return 1;
+                      if (t.includes('ศิษย์เก่า')) return 2;
+                      if (t.includes('บุคคลทั่วไป') || t.includes('นักเรียน')) return 3;
+                      return 4;
+                    };
+                    return baseTypes.sort((a, b) => getRank(a) - getRank(b));
+                  })().map((type, idx) => {
                     const isSelected = participant.memberType === type;
                     const memberIconKind = type.includes('นักศึกษา')
                       ? 'student-cap'
@@ -1356,7 +1369,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
                         : type.includes('ศิษย์เก่า')
                           ? 'alumni-building'
                           : 'public-people';
-                    const isCompactPair = idx < 2;
+                    const isCompactPair = idx === 1 || idx === 2;
                     return (
                       <button
                         type="button"
@@ -1367,7 +1380,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
                             setParticipantErrors((p) => ({ ...p, memberType: undefined }));
                           }
                         }}
-                        className={`${isCompactPair ? 'sm:col-span-1 px-3 py-2.5' : 'sm:col-span-2 px-4 py-2.5'} flex items-center justify-between rounded-full border text-left transition-all cursor-pointer ${
+                        className={`${isCompactPair ? 'sm:col-span-1 px-2.5 sm:px-3 py-2.5' : 'sm:col-span-2 px-4 py-2.5'} flex items-center justify-between rounded-full border text-left transition-all cursor-pointer ${
                           isSelected
                             ? 'bg-[#4B5E26] border-[#4B5E26] text-white font-semibold shadow-sm'
                             : participantErrors.memberType
@@ -1376,8 +1389,15 @@ export const KioskView: React.FC<KioskViewProps> = ({
                         }`}
                       >
                         <span className="flex items-center gap-1.5 min-w-0">
-                          <ParticipantOptionIcon kind={memberIconKind} className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
-                          <span className="text-xs sm:text-[13px] font-medium whitespace-nowrap truncate">{type}</span>
+                          <ParticipantOptionIcon
+                            kind={memberIconKind}
+                            className={`${isCompactPair ? 'w-4 h-4' : 'w-5 h-5'} shrink-0`}
+                          />
+                          <span
+                            className={`${isCompactPair ? 'text-xs sm:text-[13px]' : 'text-sm'} font-medium whitespace-nowrap`}
+                          >
+                            {type}
+                          </span>
                         </span>
                         <div
                           className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ml-1.5 transition-colors ${
@@ -1434,9 +1454,9 @@ export const KioskView: React.FC<KioskViewProps> = ({
           </div>
         )}
 
-        {/* STEP 3: หนังสือที่นำมาแลก */}
+        {/* STEP 3 (UNIFIED): หนังสือที่นำมาแลก + รหัส Sticker + จับคู่การแลกเปลี่ยน */}
         {step === 3 && (
-          <div className="space-y-6">
+          <div className="space-y-5">
             {/* Decorative Title Ribbon with Left Book Stack & Right Open Book */}
             <div className="-mt-[17px] flex items-center justify-center pt-1 pb-1">
               <div className="relative inline-flex items-center justify-center">
@@ -1452,8 +1472,8 @@ export const KioskView: React.FC<KioskViewProps> = ({
               </div>
             </div>
 
-            {/* Stepper Counter: [-]  2  [+] with Golden Sparkle Rays */}
-            <div className="-mt-[10px] flex items-center justify-center py-0.5">
+            {/* Stepper Counter: [-]  1  [+] with Golden Sparkle Rays */}
+            <div className="-mt-[10px] flex flex-col items-center justify-center gap-1.5 py-0.5">
               <div className="relative inline-flex items-center gap-2.5">
                 {/* Left Golden Rays */}
                 <svg viewBox="0 0 18 22" fill="none" className="w-4 h-5 pointer-events-none" aria-hidden="true">
@@ -1499,470 +1519,288 @@ export const KioskView: React.FC<KioskViewProps> = ({
               </div>
             </div>
 
-            {/* Book Cards Grid */}
-            <div className="-mt-[6px] grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5 text-left">
-              {bookEntries.map((entry, idx) => (
-                <div
-                  key={entry.tempId || idx}
-                  className="bg-[#FFFDF9] border border-[#EAE0D2] rounded-[26px] p-4 sm:p-5 space-y-3 shadow-[0_6px_22px_rgba(92,58,33,0.05)] relative"
-                >
-                  {/* Sage-Green Pill Header with Mini Book & Code Badge */}
-                  <div className="bg-gradient-to-r from-[#EBF4D6] to-[#E2EECC] border border-[#D4E4B8] rounded-full px-3.5 py-1.5 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Step3CardMiniBookIllustration
-                        variant={idx % 2 === 0 ? 'green' : 'amber'}
-                        className="w-8 h-8 -my-1 shrink-0 drop-shadow-2xs"
-                      />
-                      <span className="text-base sm:text-lg font-bold text-[#3E2723]">
-                        เล่มที่ {idx + 1}
-                      </span>
-                    </div>
-                    <span className="bg-gradient-to-b from-[#6C9640] to-[#567C2F] text-white text-xs font-bold px-3.5 py-1 rounded-full font-mono shadow-2xs">
-                      รหัส: {entry.code}
-                    </span>
-                  </div>
-
-                  {/* Title */}
-                  <div>
-                    <div className="relative">
-                      <BookOpen className="w-4 h-4 text-[#7D502E]/75 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
-                      <input
-                        type="text"
-                        value={entry.title}
-                        onChange={(e) => handleBookEntryChange(idx, 'title', e.target.value)}
-                        placeholder="ชื่อเรื่อง *"
-                        className={`w-full bg-white border ${
-                          bookValidationErrors[idx]?.includes('ชื่อเรื่อง') ? 'border-red-500' : 'border-[#E2D4C0]'
-                        } rounded-full pl-10 pr-4 py-2.5 text-sm text-[#3A2D26] placeholder-[#8E8175] focus:outline-none focus:ring-2 focus:ring-[#7D502E] transition-all shadow-2xs`}
-                      />
-                    </div>
-                    {bookValidationErrors[idx]?.includes('ชื่อเรื่อง') && (
-                      <p className="text-xs text-[#D32F2F] mt-1 pl-3">{bookValidationErrors[idx]}</p>
-                    )}
-                  </div>
-
-                  {/* Price */}
-                  <div>
-                    <div className="relative">
-                      <Tag className="w-4 h-4 text-[#7D502E]/75 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
-                      <input
-                        type="number"
-                        min="1"
-                        required
-                        value={entry.price !== undefined && entry.price !== null ? entry.price : ''}
-                        onChange={(e) =>
-                          handleBookEntryChange(
-                            idx,
-                            'price',
-                            e.target.value === '' ? undefined : Number(e.target.value)
-                          )
-                        }
-                        placeholder="ราคา * (หากไม่มีโปรดประมาณมูลค่า)"
-                        className={`w-full bg-white border ${
-                          bookValidationErrors[idx]?.includes('ราคา') ? 'border-red-500 bg-red-50/20' : 'border-[#E2D4C0]'
-                        } rounded-full pl-10 pr-4 py-2.5 text-sm text-[#3A2D26] placeholder-[#8E8175] focus:outline-none focus:ring-2 focus:ring-[#7D502E] transition-all shadow-2xs`}
-                      />
-                    </div>
-                    {bookValidationErrors[idx]?.includes('ราคา') && (
-                      <p className="text-xs text-[#D32F2F] mt-1 pl-3">{bookValidationErrors[idx]}</p>
-                    )}
-                  </div>
-
-                  {/* Category Pill Buttons */}
-                  <div>
-                    <label className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-[#3E2723] mb-2 pl-1">
-                      <Layers className="w-4 h-4 text-[#7D502E] shrink-0" />
-                      <span>
-                        ประเภทหนังสือ <span className="text-[#D32F2F]">*</span>
-                      </span>
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      {categoryOptions.map((cat) => {
-                        const isSelected = entry.category === cat;
-                        const hasCategoryError = bookValidationErrors[idx]?.includes('ประเภทหนังสือ');
-                        return (
-                          <button
-                            type="button"
-                            key={cat}
-                            onClick={() => handleBookEntryChange(idx, 'category', cat)}
-                            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-full border text-xs sm:text-[13px] transition-all cursor-pointer ${
-                              isSelected
-                                ? 'bg-[#4B5E26] border-[#4B5E26] text-white font-semibold shadow-xs'
-                                : hasCategoryError
-                                  ? 'bg-white border-red-300 text-[#4E342E] hover:bg-[#F8F2E7] shadow-2xs'
-                                  : 'bg-white border-[#E2D4C0] text-[#3A2D26] hover:bg-[#F8F2E7] hover:border-[#7D502E] font-medium shadow-2xs'
-                            }`}
-                          >
-                            <span className="whitespace-nowrap">{cat}</span>
-                            <span
-                              className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
-                                isSelected
-                                  ? 'border-white bg-white text-[#4B5E26]'
-                                  : 'border-[#C8B8A6] bg-white'
-                              }`}
-                            >
-                              {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {bookValidationErrors[idx]?.includes('ประเภทหนังสือ') && (
-                      <p className="text-xs text-[#D32F2F] mt-1.5 pl-3">{bookValidationErrors[idx]}</p>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3.5 pt-1">
-              {renderBackButton()}
-              <button
-                type="button"
-                onClick={() => {
-                  if (validateBooksBrought()) {
-                    setStep(4);
-                  }
-                }}
-                className="w-full sm:flex-1 py-3.5 px-8 rounded-full bg-gradient-to-b from-[#8D5B34] to-[#6F4424] hover:from-[#7B4E2B] hover:to-[#5D381C] active:scale-[0.99] text-white font-bold text-base sm:text-lg shadow-[0_8px_24px_rgba(111,68,36,0.26)] transition-all cursor-pointer flex items-center justify-center gap-3 relative overflow-hidden"
-              >
-                <span
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-[4px] rounded-full border border-dashed border-[#E6C59C]/40"
-                />
-                <span className="relative z-10">ถัดไป</span>
-                <span className="relative z-10 flex items-center gap-1.5">
-                  <span className="w-6 h-6 rounded-full bg-white text-[#6F4424] flex items-center justify-center shrink-0 shadow-xs">
-                    <ChevronRight className="w-4 h-4 stroke-[2.75]" />
-                  </span>
-                  <svg
-                    viewBox="0 0 18 22"
-                    fill="none"
-                    className="w-4 h-5 hidden sm:block"
-                    aria-hidden="true"
-                  >
-                    <path d="M2 5L9 1" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
-                    <path d="M4 11L14 10" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
-                    <path d="M2 17L9 21" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
-                  </svg>
-                </span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* STEP 4: ขั้นตอนการติด Sticker */}
-        {step === 4 && (
-          <div className="space-y-5 text-center">
-            {/* Decorative Title Ribbon with Tilted Yellow Tape Sticker */}
-            <div className="-mt-[17px] flex items-center justify-center pt-1 pb-1">
-              <div className="relative inline-flex items-center justify-center">
-                {/* Tilted Yellow Sticker Tape Strip */}
-                <svg
-                  viewBox="0 0 56 44"
-                  fill="none"
-                  className="w-11 h-9 sm:w-13 sm:h-10 absolute -top-2.5 -left-3 sm:-left-4 z-20 pointer-events-none drop-shadow-2xs"
-                  aria-hidden="true"
-                >
-                  <g transform="rotate(-38 28 22)">
-                    <rect x="6" y="13" width="44" height="16" rx="3" fill="#F8D568" stroke="#E5B93D" strokeWidth="1.2" />
-                    <line x1="14" y1="16" x2="42" y2="16" stroke="#FCE79C" strokeWidth="2" strokeLinecap="round" />
-                  </g>
-                </svg>
-
-                <div className="bg-gradient-to-r from-[#E6F1D0] via-[#F2E9CC] to-[#E6F1D0] border border-[#CFE2AD] rounded-full px-8 sm:px-14 py-2.5 sm:py-3 shadow-[0_4px_14px_rgba(106,136,82,0.12)] relative z-10">
-                  <h2 className="text-base sm:text-xl md:text-2xl font-bold text-[#5C3A21] tracking-tight leading-snug">
-                    ขั้นตอนการติด Sticker บนหนังสือที่นำมา เพื่อเตรียมขึ้นชั้นแลก
-                  </h2>
-                </div>
-              </div>
-            </div>
-
-            {/* Centerpiece BOOK SWAP Book + Mini Book Stack + Sticker Roll Scene */}
-            <div className="-mt-[6px] flex justify-center">
-              <Step4StickerBookSceneIllustration
-                stickerCode={bookEntries[0]?.code || 'U1'}
-                className="w-72 sm:w-96 md:w-[420px] h-auto drop-shadow-xs pointer-events-none"
-              />
-            </div>
-
-            {/* Instruction Callout Box with Green Accent Rays & Highlighted "มุมขวาบน" */}
-            <div className="-mt-[8px] flex items-center justify-center">
-              <div className="relative inline-flex items-center justify-center gap-2 sm:gap-3">
-                {/* Left Green Rays */}
-                <svg viewBox="0 0 22 28" fill="none" className="w-5 h-7 hidden sm:block pointer-events-none" aria-hidden="true">
-                  <path d="M19 6L9 2" stroke="#96BE58" strokeWidth="2.8" strokeLinecap="round" />
-                  <path d="M18 14L4 14" stroke="#96BE58" strokeWidth="2.8" strokeLinecap="round" />
-                  <path d="M19 22L9 26" stroke="#96BE58" strokeWidth="2.8" strokeLinecap="round" />
-                </svg>
-
-                <div className="bg-[#FBEAD2] border border-[#EED4AE] rounded-[22px] px-6 sm:px-10 py-3.5 shadow-[0_4px_14px_rgba(140,98,57,0.08)]">
-                  <p className="text-sm sm:text-base md:text-lg font-bold text-[#4E342E] leading-relaxed">
-                    กรุณานำ Sticker หมายเลข ไปติดบนหนังสือจริง
-                    <br />
-                    ตำแหน่ง{' '}
-                    <span className="inline-block bg-[#9BC54D] text-[#3B2616] px-3.5 py-0.5 rounded-full font-extrabold mx-0.5 shadow-2xs">
-                      มุมขวาบน
-                    </span>{' '}
-                    ของหนังสือ
-                  </p>
-                </div>
-
-                {/* Right Green Rays */}
-                <svg viewBox="0 0 22 28" fill="none" className="w-5 h-7 hidden sm:block pointer-events-none" aria-hidden="true">
-                  <path d="M3 6L13 2" stroke="#96BE58" strokeWidth="2.8" strokeLinecap="round" />
-                  <path d="M4 14L18 14" stroke="#96BE58" strokeWidth="2.8" strokeLinecap="round" />
-                  <path d="M3 22L13 26" stroke="#96BE58" strokeWidth="2.8" strokeLinecap="round" />
-                </svg>
-              </div>
-            </div>
-
-            {/* Book Sticker Rows */}
-            <div className="max-w-xl mx-auto space-y-2.5 text-left relative pt-1">
-              {bookEntries.map((b, i) => (
-                <div key={b.tempId} className="relative">
-                  {/* Decorative open book peeking on bottom-left of first row */}
-                  {i === 0 && (
-                    <Step4MiniOpenBookIllustration className="hidden sm:block w-16 h-13 absolute -left-14 -bottom-2 z-20 pointer-events-none drop-shadow-2xs" />
-                  )}
-                  {/* Golden Sparkle Rays peeking on top-right of first row */}
-                  {i === 0 && (
-                    <svg
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      className="hidden sm:block w-6 h-6 absolute -top-3 -right-3 z-20 pointer-events-none"
-                      aria-hidden="true"
-                    >
-                      <path d="M5 10L11 3" stroke="#F59E0B" strokeWidth="2.6" strokeLinecap="round" />
-                      <path d="M9 14L18 10" stroke="#F59E0B" strokeWidth="2.6" strokeLinecap="round" />
-                      <path d="M11 19L19 19" stroke="#F59E0B" strokeWidth="2.6" strokeLinecap="round" />
-                    </svg>
-                  )}
-
-                  <div className="bg-[#FFFDF9] border border-[#EAE0D2] rounded-full px-4 sm:px-5 py-2.5 flex items-center justify-between text-xs sm:text-sm shadow-[0_4px_14px_rgba(92,58,33,0.05)] gap-3">
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <span className="w-7 h-7 rounded-full bg-[#7D502E] text-white flex items-center justify-center font-bold text-xs shrink-0 tabular-nums shadow-2xs">
-                        {i + 1}
-                      </span>
-                      <span className="font-bold text-[#3A2D26] truncate text-sm sm:text-base">
-                        {b.title || `เล่มที่ ${i + 1}`}
-                      </span>
-                    </div>
-
-                    <div className="hidden sm:block w-px h-5 bg-[#EAE0D2] shrink-0" />
-
-                    <span className="bg-[#F2DFBF] border border-[#E2C69B] text-[#4E342E] font-mono font-bold px-4 py-1 rounded-full shrink-0 text-xs sm:text-sm shadow-2xs">
-                      ติด Sticker : {b.code}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center gap-3.5 pt-2">
-              {renderBackButton()}
-              <button
-                type="button"
-                onClick={() => setStep(5)}
-                className="w-full sm:flex-1 py-3.5 px-8 rounded-full bg-gradient-to-b from-[#8D5B34] to-[#6F4424] hover:from-[#7B4E2B] hover:to-[#5D381C] active:scale-[0.99] text-white font-bold text-base sm:text-lg shadow-[0_8px_24px_rgba(111,68,36,0.26)] transition-all cursor-pointer flex items-center justify-center gap-3 relative overflow-hidden"
-              >
-                <span
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-[4px] rounded-full border border-dashed border-[#E6C59C]/40"
-                />
-                <span className="relative z-10">ยืนยันการติดสติกเกอร์</span>
-                <span className="relative z-10 flex items-center gap-1.5">
-                  <span className="w-6 h-6 rounded-full bg-white text-[#6F4424] flex items-center justify-center shrink-0 shadow-xs">
-                    <ChevronRight className="w-4 h-4 stroke-[2.75]" />
-                  </span>
-                  <svg
-                    viewBox="0 0 18 22"
-                    fill="none"
-                    className="w-4 h-5 hidden sm:block"
-                    aria-hidden="true"
-                  >
-                    <path d="M2 5L9 1" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
-                    <path d="M4 11L14 10" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
-                    <path d="M2 17L9 21" stroke="#FBBF24" strokeWidth="2.5" strokeLinecap="round" />
-                  </svg>
-                </span>
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* STEP 5: จับคู่การแลกเปลี่ยน */}
-        {step === 5 && (
-          <div className="space-y-6">
-            {/* Header Composition: Left Book Stack | Center Title Pill + Browse CTA | Right Search Book Mascot */}
-            <div className="-mt-[17px] flex items-center justify-center md:justify-between gap-4 pt-1">
-              <Step3LeftBookStackIllustration className="hidden md:block w-36 lg:w-42 h-auto shrink-0 pointer-events-none drop-shadow-xs" />
-
-              <div className="text-center space-y-2.5 flex-1 flex flex-col items-center">
-                <div className="inline-flex items-center gap-3 bg-gradient-to-r from-[#E6F1D0] via-[#DCECC0] to-[#E6F1D0] border border-[#CFE2AD] rounded-full pl-2.5 pr-7 sm:pr-9 py-1.5 shadow-[0_4px_14px_rgba(106,136,82,0.12)]">
-                  <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#B9D87C] border border-[#96BC54] flex items-center justify-center shrink-0 shadow-2xs">
-                    <RotateCcw className="w-4 h-4 sm:w-5 sm:h-5 text-[#3B4C1D] stroke-[2.25]" />
-                  </div>
-                  <h2 className="text-lg sm:text-2xl md:text-[26px] font-bold text-[#5C3A21] tracking-tight whitespace-nowrap">
-                    จับคู่การแลกเปลี่ยน
-                  </h2>
-                </div>
-
-                <p className="text-sm sm:text-base text-[#4E342E] font-medium">
-                  ท่านนำหนังสือมาแลก {bookEntries.length} เล่ม
-                </p>
-
-                <button
-                  type="button"
-                  onClick={() => handleOpenShelfBrowser(0)}
-                  className="inline-flex items-center gap-2 text-xs sm:text-sm text-[#3E2723] bg-[#EDF4DF] hover:bg-[#E1EDCA] px-5 py-2 rounded-full font-semibold transition-colors cursor-pointer border border-[#BDD199] shadow-2xs"
-                >
-                  {isRefreshingStep5Books ? (
-                    <RefreshCw className="w-4 h-4 text-[#4B5E26] shrink-0 animate-spin" />
-                  ) : (
-                    <Search className="w-4 h-4 text-[#4B5E26] shrink-0" />
-                  )}
-                  <span>
-                    {isRefreshingStep5Books
-                      ? 'กำลังอัปเดตหนังสือล่าสุดจาก Google Sheet...'
-                      : `คลิกดูหนังสือพร้อมแลกเปลี่ยน (${availableBooks.length} เล่ม)`}
-                  </span>
-                </button>
-              </div>
-
-              <Step5BookSearchMascotIllustration className="hidden md:block w-36 lg:w-44 h-auto shrink-0 pointer-events-none drop-shadow-xs" />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-5 text-left">
+            {/* Unified Book Entry + Sticker Code + Exchange Match Cards */}
+            <div className="space-y-4 text-left">
               {bookEntries.map((entry, idx) => {
                 const isCancelled = entry.isCancelled;
                 const isDonation = entry.matchTargetCode === 'DONATION';
                 const feedback = matchVerificationFeedback[idx];
-                const error = matchErrors[idx];
+                const matchError = matchErrors[idx];
 
                 return (
                   <div
                     key={entry.tempId || idx}
-                    className="bg-[#FFFDF9] border border-[#EAE0D2] rounded-[26px] p-4 sm:p-5 space-y-3.5 shadow-[0_6px_22px_rgba(92,58,33,0.05)]"
+                    className="bg-[#FFFDF9] border-[1.5px] border-[#DFCEB8] rounded-[28px] p-4 sm:p-5 shadow-[0_6px_22px_rgba(92,58,33,0.06)]"
                   >
-                    <div className="flex items-start gap-3">
-                      <div
-                        className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 border ${
-                          idx % 2 === 0
-                            ? 'bg-[#E6F1D0] border-[#CFE2AD]'
-                            : 'bg-[#FDF3DA] border-[#F2DC9F]'
-                        }`}
-                      >
-                        <Step3CardMiniBookIllustration
-                          variant={idx % 2 === 0 ? 'green' : 'amber'}
-                          className="w-7 h-7"
-                        />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <h3 className="font-bold text-[#3E2723] text-sm sm:text-[15px] leading-snug">
-                          หนังสือที่นำมา รหัส{' '}
-                          <span className="inline-block bg-[#F7E9CA] border border-[#E7CFA0] text-[#4E342E] font-mono font-extrabold px-2.5 py-0.5 rounded-full mx-0.5">
-                            {entry.code}
-                          </span>{' '}
-                          จะ Match เล่มไหน
-                        </h3>
-                        <p className="text-xs text-[#7E7369] mt-0.5 truncate">
-                          {entry.title ? `${entry.title} (เล่มที่ ${idx + 1})` : `ลำดับที่ (เล่มที่ ${idx + 1})`}
-                        </p>
-                      </div>
-                    </div>
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 items-stretch">
+                      {/* LEFT SIDE: Book Details + Sticker U-Code + Categories */}
+                      <div className="lg:col-span-7 flex flex-col justify-between space-y-3.5">
+                        {/* Sage-Green Pill Header with Mini Book, Sticker Tip & Code Badge */}
+                        <div className="bg-gradient-to-r from-[#EBF4D6] to-[#E2EECC] border border-[#D4E4B8] rounded-full px-3.5 py-1.5 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <Step3CardMiniBookIllustration
+                              variant={idx % 2 === 0 ? 'green' : 'amber'}
+                              className="w-8 h-8 -my-1 shrink-0 drop-shadow-2xs"
+                            />
+                            <span className="text-base sm:text-lg font-bold text-[#3E2723] whitespace-nowrap">
+                              เล่มที่ {idx + 1}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="hidden sm:inline-flex items-center bg-[#FBEAD2] border border-[#E5CFA2] text-[#5C3A21] text-[11px] font-semibold px-2.5 py-0.5 rounded-full whitespace-nowrap">
+                              ติดสติกเกอร์มุมขวาบน
+                            </span>
+                            <span className="bg-gradient-to-b from-[#6C9640] to-[#567C2F] text-white text-xs sm:text-[13px] font-bold px-3.5 py-1 rounded-full font-mono shadow-2xs whitespace-nowrap">
+                              รหัส: {entry.code}
+                            </span>
+                          </div>
+                        </div>
 
-                    <div className="space-y-2.5">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="text"
-                          disabled={isCancelled || isDonation}
-                          value={
-                            isDonation
-                              ? 'DONATION (บริจาค)'
-                              : isCancelled
-                                ? 'NOT MATCH (ยกเลิก)'
-                                : entry.matchTargetCode || ''
-                          }
-                          onChange={(e) => {
-                            handleBookEntryChange(idx, 'isCancelled', false);
-                            handleBookEntryChange(idx, 'matchTargetCode', e.target.value.toUpperCase());
-                          }}
-                          placeholder="กรอกรหัส (เช่น L1, U1)"
-                          className="flex-1 min-w-0 bg-white border border-[#E2D4C0] disabled:bg-[#F3ECE1] rounded-full px-4 py-2.5 text-sm text-[#3A2D26] placeholder-[#8E8175] focus:outline-none focus:ring-2 focus:ring-[#7D502E] uppercase shadow-2xs"
-                        />
-                        <button
-                          type="button"
-                          disabled={isCancelled || isDonation}
-                          onClick={() => handleCheckCode(idx)}
-                          className="bg-gradient-to-b from-[#6C9640] to-[#567C2F] hover:from-[#5D8435] hover:to-[#4A6B27] active:scale-95 disabled:opacity-40 text-white rounded-full px-5 py-2.5 text-xs sm:text-sm font-bold transition-all cursor-pointer shrink-0 shadow-xs whitespace-nowrap"
-                        >
-                          Match Check
-                        </button>
-                      </div>
-
-                      {feedback && (
-                        <div
-                          className={`rounded-2xl px-3.5 py-2 text-xs flex items-start gap-2 ${
-                            feedback.success
-                              ? 'bg-[#E9EBC8]/70 text-[#3B4C1D] border border-[#C6D29E]'
-                              : 'bg-[#FFF0F0] text-[#D32F2F] border border-[#FFCDCD]'
-                          }`}
-                        >
-                          {feedback.success ? (
-                            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                          ) : (
-                            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                        {/* Title Input */}
+                        <div>
+                          <div className="relative">
+                            <BookOpen className="w-4 h-4 text-[#7D502E]/75 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <input
+                              type="text"
+                              disabled={isCancelled}
+                              value={entry.title}
+                              onChange={(e) => handleBookEntryChange(idx, 'title', e.target.value)}
+                              placeholder="ชื่อเรื่อง *"
+                              className={`w-full bg-white disabled:bg-[#F5EFE6] border ${
+                                bookValidationErrors[idx]?.includes('ชื่อเรื่อง') ? 'border-red-500' : 'border-[#E2D4C0]'
+                              } rounded-full pl-10 pr-4 py-2.5 text-sm text-[#3A2D26] placeholder-[#8E8175] focus:outline-none focus:ring-2 focus:ring-[#7D502E] transition-all shadow-2xs`}
+                            />
+                          </div>
+                          {bookValidationErrors[idx]?.includes('ชื่อเรื่อง') && (
+                            <p className="text-xs text-[#D32F2F] mt-1 pl-3">{bookValidationErrors[idx]}</p>
                           )}
-                          <span>{feedback.message}</span>
                         </div>
-                      )}
 
-                      {error && !feedback && (
-                        <div className="rounded-2xl px-3.5 py-2 text-xs bg-[#FFF0F0] text-[#D32F2F] border border-[#FFCDCD] flex items-center gap-1.5">
-                          <AlertCircle className="w-4 h-4 shrink-0" />
-                          <span>{error}</span>
+                        {/* Price Input */}
+                        <div>
+                          <div className="relative">
+                            <Tag className="w-4 h-4 text-[#7D502E]/75 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <input
+                              type="number"
+                              min="1"
+                              required
+                              disabled={isCancelled}
+                              value={entry.price !== undefined && entry.price !== null ? entry.price : ''}
+                              onChange={(e) =>
+                                handleBookEntryChange(
+                                  idx,
+                                  'price',
+                                  e.target.value === '' ? undefined : Number(e.target.value)
+                                )
+                              }
+                              placeholder="ราคา * (หากไม่มีโปรดประมาณมูลค่า)"
+                              className={`w-full bg-white disabled:bg-[#F5EFE6] border ${
+                                bookValidationErrors[idx]?.includes('ราคา') ? 'border-red-500 bg-red-50/20' : 'border-[#E2D4C0]'
+                              } rounded-full pl-10 pr-4 py-2.5 text-sm text-[#3A2D26] placeholder-[#8E8175] focus:outline-none focus:ring-2 focus:ring-[#7D502E] transition-all shadow-2xs`}
+                            />
+                          </div>
+                          {bookValidationErrors[idx]?.includes('ราคา') && (
+                            <p className="text-xs text-[#D32F2F] mt-1 pl-3">{bookValidationErrors[idx]}</p>
+                          )}
                         </div>
-                      )}
 
-                      {/* Search Available Books */}
-                      <button
-                        type="button"
-                        disabled={isCancelled || isDonation}
-                        onClick={() => handleOpenShelfBrowser(idx)}
-                        className="w-full py-2.5 px-4 bg-[#4B5E26] hover:bg-[#3B4B1D] active:scale-[0.99] disabled:opacity-40 text-white rounded-full text-xs sm:text-[13px] font-semibold transition-all cursor-pointer shadow-xs flex items-center justify-center gap-2"
-                      >
-                        <Search className="w-3.5 h-3.5 shrink-0" />
-                        <span>ค้นหาหนังสือพร้อมแลกเปลี่ยน (Available)</span>
-                      </button>
+                        {/* Category Pill Buttons */}
+                        <div className="pt-0.5">
+                          <label className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-[#3E2723] mb-2 pl-1">
+                            <Layers className="w-4 h-4 text-[#7D502E] shrink-0" />
+                            <span>
+                              ประเภทหนังสือ <span className="text-[#D32F2F]">*</span>
+                            </span>
+                          </label>
+                          <div className="flex flex-wrap gap-2">
+                            {categoryOptions.map((cat) => {
+                              const isSelected = entry.category === cat;
+                              const hasCategoryError = bookValidationErrors[idx]?.includes('ประเภทหนังสือ');
+                              return (
+                                <button
+                                  type="button"
+                                  disabled={isCancelled}
+                                  key={cat}
+                                  onClick={() => handleBookEntryChange(idx, 'category', cat)}
+                                  className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-full border text-xs sm:text-[13px] transition-all cursor-pointer disabled:opacity-50 ${
+                                    isSelected
+                                      ? 'bg-[#4B5E26] border-[#4B5E26] text-white font-semibold shadow-xs'
+                                      : hasCategoryError
+                                        ? 'bg-white border-red-300 text-[#4E342E] hover:bg-[#F8F2E7] shadow-2xs'
+                                        : 'bg-white border-[#E2D4C0] text-[#3A2D26] hover:bg-[#F8F2E7] hover:border-[#7D502E] font-medium shadow-2xs'
+                                  }`}
+                                >
+                                  <span className="whitespace-nowrap">{cat}</span>
+                                  <span
+                                    className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors ${
+                                      isSelected
+                                        ? 'border-white bg-white text-[#4B5E26]'
+                                        : 'border-[#C8B8A6] bg-white'
+                                    }`}
+                                  >
+                                    {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {bookValidationErrors[idx]?.includes('ประเภทหนังสือ') && (
+                            <p className="text-xs text-[#D32F2F] mt-1.5 pl-3">{bookValidationErrors[idx]}</p>
+                          )}
+                        </div>
+                      </div>
 
-                      {/* Donation & Cancel Match (Side-by-side row) */}
-                      <div className="grid grid-cols-2 gap-2.5">
-                        <button
-                          type="button"
-                          onClick={() => handleSetDonation(idx)}
-                          className={`w-full py-2.5 px-3 rounded-full text-xs sm:text-[13px] font-semibold border transition-colors cursor-pointer flex items-center justify-center gap-1.5 text-center whitespace-nowrap ${
-                            isDonation
-                              ? 'bg-[#E6B875] border-[#9E6F38] text-[#4E2E0C] ring-2 ring-[#9E6F38]/30'
-                              : 'bg-[#F7F0E3] hover:bg-[#EFE2CA] text-[#4E342E] border-[#E2D4C0]'
-                          }`}
-                        >
-                          <Package className="w-4 h-4 shrink-0 text-[#7D502E]" />
-                          <span>{isDonation ? '✓ ต้องการบริจาค' : 'ต้องการบริจาค'}</span>
-                        </button>
+                      {/* RIGHT SIDE: Matching Panel (Warm Olive-Beige Container) */}
+                      <div className="lg:col-span-5 bg-[#E6E4CB]/80 border border-[#D4D2B5] rounded-[24px] p-3.5 sm:p-4 flex flex-col justify-between gap-3">
+                        {/* Centered Pill Header: จับคู่การแลกเปลี่ยน */}
+                        <div className="flex justify-center">
+                          <div className="inline-flex items-center gap-2.5 bg-gradient-to-r from-[#E6F1D0] via-[#DCECC0] to-[#E6F1D0] border border-[#C6DA9F] rounded-full pl-2 pr-6 py-1.5 shadow-2xs">
+                            <div className="w-8 h-8 rounded-full bg-[#B9D87C] border border-[#96BC54] flex items-center justify-center shrink-0">
+                              <RotateCcw className="w-4 h-4 text-[#3B4C1D] stroke-[2.25]" />
+                            </div>
+                            <span className="text-base sm:text-lg font-bold text-[#5C3A21] tracking-tight whitespace-nowrap">
+                              จับคู่การแลกเปลี่ยน
+                            </span>
+                          </div>
+                        </div>
 
-                        <button
-                          type="button"
-                          onClick={() => handleSetNotMatch(idx)}
-                          className={`w-full py-2.5 px-3 rounded-full text-xs sm:text-[13px] font-semibold border transition-colors cursor-pointer flex items-center justify-center gap-1.5 text-center whitespace-nowrap ${
-                            isCancelled
-                              ? 'bg-[#FADBD2] border-[#C97B6A] text-[#8B3A2B] ring-2 ring-[#C97B6A]/30'
-                              : 'bg-[#FFF3F1] hover:bg-[#FADBD2]/60 text-[#9B4333] border-[#F2CBC2]'
-                          }`}
-                        >
-                          <RotateCcw className="w-3.5 h-3.5 shrink-0 text-[#C62828]" />
-                          <span>{isCancelled ? '✓ ยกเลิกการแลก' : 'ยกเลิกการแลก'}</span>
-                        </button>
+                        {/* Inner White Match Box */}
+                        <div className="bg-white border border-[#EAE0D2] rounded-[20px] p-3.5 sm:p-4 space-y-2.5 shadow-xs flex-1 flex flex-col justify-between">
+                          <div className="flex items-start gap-2.5">
+                            <div
+                              className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 border ${
+                                idx % 2 === 0
+                                  ? 'bg-[#E6F1D0] border-[#CFE2AD]'
+                                  : 'bg-[#FDF3DA] border-[#F2DC9F]'
+                              }`}
+                            >
+                              <Step3CardMiniBookIllustration
+                                variant={idx % 2 === 0 ? 'green' : 'amber'}
+                                className="w-6 h-6"
+                              />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <h3 className="font-bold text-[#3E2723] text-xs sm:text-sm leading-snug">
+                                หนังสือที่นำมา รหัส{' '}
+                                <span className="inline-block bg-[#F7E9CA] border border-[#E7CFA0] text-[#4E342E] font-mono font-extrabold px-2 py-0.5 rounded-full mx-0.5">
+                                  {entry.code}
+                                </span>{' '}
+                                จะ Match เล่มไหน
+                              </h3>
+                              <p className="text-[11px] sm:text-xs text-[#7E7369] mt-0.5 truncate">
+                                {entry.title ? `${entry.title} (เล่มที่ ${idx + 1})` : `เล่มที่ ${idx + 1}`}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                disabled={isCancelled || isDonation}
+                                value={
+                                  isDonation
+                                    ? 'DONATION (บริจาค)'
+                                    : isCancelled
+                                      ? 'NOT MATCH (ยกเลิก)'
+                                      : entry.matchTargetCode || ''
+                                }
+                                onChange={(e) => {
+                                  handleBookEntryChange(idx, 'isCancelled', false);
+                                  handleBookEntryChange(idx, 'matchTargetCode', e.target.value.toUpperCase());
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !isCancelled && !isDonation) {
+                                    e.preventDefault();
+                                    handleCheckCode(idx);
+                                  }
+                                }}
+                                placeholder="กรอกรหัส (เช่น L1, U1)"
+                                className="flex-1 min-w-0 bg-white border border-[#E2D4C0] disabled:bg-[#F3ECE1] rounded-full px-3.5 py-2 text-xs sm:text-sm text-[#3A2D26] placeholder-[#8E8175] focus:outline-none focus:ring-2 focus:ring-[#7D502E] uppercase shadow-2xs"
+                              />
+                              <button
+                                type="button"
+                                disabled={isCancelled || isDonation}
+                                onClick={() => handleCheckCode(idx)}
+                                className="bg-gradient-to-b from-[#6C9640] to-[#567C2F] hover:from-[#5D8435] hover:to-[#4A6B27] active:scale-95 disabled:opacity-40 text-white rounded-full px-4 py-2 text-xs font-bold transition-all cursor-pointer shrink-0 shadow-xs whitespace-nowrap"
+                              >
+                                Match Check
+                              </button>
+                            </div>
+
+                            {feedback && (
+                              <div
+                                className={`rounded-2xl px-3 py-2 text-xs flex items-start gap-2 ${
+                                  feedback.success
+                                    ? 'bg-[#E9EBC8]/70 text-[#3B4C1D] border border-[#C6D29E]'
+                                    : 'bg-[#FFF0F0] text-[#D32F2F] border border-[#FFCDCD]'
+                                }`}
+                              >
+                                {feedback.success ? (
+                                  <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                                ) : (
+                                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                                )}
+                                <span className="leading-snug">{feedback.message}</span>
+                              </div>
+                            )}
+
+                            {matchError && !feedback && (
+                              <div className="rounded-2xl px-3 py-2 text-xs bg-[#FFF0F0] text-[#D32F2F] border border-[#FFCDCD] flex items-center gap-1.5">
+                                <AlertCircle className="w-4 h-4 shrink-0" />
+                                <span>{matchError}</span>
+                              </div>
+                            )}
+
+                            {/* Search Available Books */}
+                            <button
+                              type="button"
+                              disabled={isCancelled || isDonation}
+                              onClick={() => handleOpenShelfBrowser(idx)}
+                              className="w-full py-2.5 px-3.5 bg-[#4B5E26] hover:bg-[#3B4B1D] active:scale-[0.99] disabled:opacity-40 text-white rounded-full text-xs font-semibold transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1.5"
+                            >
+                              {isRefreshingStep5Books ? (
+                                <RefreshCw className="w-3.5 h-3.5 shrink-0 animate-spin" />
+                              ) : (
+                                <Search className="w-3.5 h-3.5 shrink-0" />
+                              )}
+                              <span>
+                                {isRefreshingStep5Books
+                                  ? 'กำลังอัปเดตหนังสือจาก Sheet...'
+                                  : `ค้นหาหนังสือพร้อมแลกเปลี่ยน (Available: ${availableBooks.length})`}
+                              </span>
+                            </button>
+
+                            {/* Donation & Cancel Match */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleSetDonation(idx)}
+                                className={`w-full py-2 px-2.5 rounded-full text-xs font-semibold border transition-colors cursor-pointer flex items-center justify-center gap-1.5 text-center whitespace-nowrap ${
+                                  isDonation
+                                    ? 'bg-[#E6B875] border-[#9E6F38] text-[#4E2E0C] ring-2 ring-[#9E6F38]/30'
+                                    : 'bg-[#F7F0E3] hover:bg-[#EFE2CA] text-[#4E342E] border-[#E2D4C0]'
+                                }`}
+                              >
+                                <Package className="w-3.5 h-3.5 shrink-0 text-[#7D502E]" />
+                                <span>{isDonation ? '✓ ต้องการบริจาค' : 'ต้องการบริจาค'}</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleSetNotMatch(idx)}
+                                className={`w-full py-2 px-2.5 rounded-full text-xs font-semibold border transition-colors cursor-pointer flex items-center justify-center gap-1.5 text-center whitespace-nowrap ${
+                                  isCancelled
+                                    ? 'bg-[#FADBD2] border-[#C97B6A] text-[#8B3A2B] ring-2 ring-[#C97B6A]/30'
+                                    : 'bg-[#FFF3F1] hover:bg-[#FADBD2]/60 text-[#9B4333] border-[#F2CBC2]'
+                                }`}
+                              >
+                                <RotateCcw className="w-3.5 h-3.5 shrink-0 text-[#C62828]" />
+                                <span>{isCancelled ? '✓ ยกเลิกการแลก' : 'ยกเลิกการแลก'}</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2012,8 +1850,8 @@ export const KioskView: React.FC<KioskViewProps> = ({
           </div>
         )}
 
-        {/* STEP 6: สิ้นสุด / สรุปรายการ */}
-        {step === 6 && completedTransaction && (
+        {/* STEP 4: สิ้นสุด / สรุปรายการ */}
+        {step === 4 && completedTransaction && (
           <div className="space-y-4 sm:space-y-5 text-center relative">
             {/* Top Celebration Check Badge + Golden Sparkle Rays */}
             <div className="flex flex-col items-center">
@@ -2177,7 +2015,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
                                 ? 'กำลังบันทึกลง Google Sheet...'
                                 : googleConnected
                                   ? 'ลองส่งขึ้น Google Sheet อีกครั้ง'
-                                  : 'ลงชื่อเข้าใช้ Google Mail เพื่อบันทึกลง Sheet ทันที'}
+                                  : 'ตั้งค่า/เชื่อมต่อเพื่อบันทึกลง Sheet ทันที'}
                             </span>
                           </button>
                         </div>
