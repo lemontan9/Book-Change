@@ -34,7 +34,6 @@ import {
   TermsTitleOpenBookIllustration,
   TermsChecklistMascotIllustration,
   ParticipantClipboardBadgeIllustration,
-  ParticipantBookMascotIllustration,
   ParticipantOptionIcon,
   Step3LeftBookStackIllustration,
   Step3RightOpenBookIllustration,
@@ -1197,139 +1196,149 @@ export const KioskView: React.FC<KioskViewProps> = ({
               </div>
             </div>
 
-            <div className="-mt-[8px] space-y-3 text-left">
-              {/* Top Section with Groups 1 & 2 on Left and Cute Pencil Book Mascot on Right */}
-              <div className="relative -mt-[15px] pt-0">
-                <div className="space-y-2.5 md:pr-44 lg:pr-48">
-                  {/* Group 1: การร่วมกิจกรรม */}
-                  <div>
-                    <label className="flex items-center gap-2 text-sm sm:text-base font-bold text-[#3E2723] mb-1.5">
-                      <ParticipantOptionIcon kind="users-badge" className="w-6 h-5 shrink-0" />
-                      <span>
-                        การร่วมกิจกรรม <span className="text-[#D32F2F]">*</span>
-                      </span>
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {(settings.participationHistoryOptions && settings.participationHistoryOptions.length > 0
-                        ? settings.participationHistoryOptions
-                        : ['เคยเข้าร่วมกิจกรรมในปีที่ผ่านมา', 'ปีนี้เป็นครั้งแรก']
-                      ).map((opt, idx) => {
-                        const isSelected = participant.participationHistory === opt;
-                        const iconKind =
-                          opt.includes('ครั้งแรก') || opt.includes('ยังไม่เคย')
-                            ? 'book-sprout'
-                            : idx === 1 && !opt.includes('เคยเข้าร่วม')
-                              ? 'book-sprout'
-                              : 'book-trio';
-                        return (
-                          <button
-                            type="button"
-                            key={opt}
-                            onClick={() => {
-                              setParticipant((p) => ({ ...p, participationHistory: opt }));
-                              if (participantErrors.participationHistory) {
-                                setParticipantErrors((p) => ({ ...p, participationHistory: undefined }));
-                              }
-                            }}
-                            className={`flex items-center justify-between px-4 py-2.5 rounded-full border text-left transition-all cursor-pointer ${
-                              isSelected
-                                ? 'bg-[#4B5E26] border-[#4B5E26] text-white font-semibold shadow-sm'
-                                : participantErrors.participationHistory
-                                  ? 'bg-[#FFFDF9] border-red-300 text-[#4E342E] hover:bg-[#F8F2E7] shadow-[0_3px_10px_rgba(92,58,33,0.04)]'
-                                  : 'bg-[#FFFDF9] border-[#E5D8C8] text-[#3A2D26] hover:bg-[#F8F2E7] hover:border-[#7D502E] shadow-[0_3px_10px_rgba(92,58,33,0.04)]'
-                            }`}
-                          >
-                            <span className="flex items-center gap-2.5 min-w-0">
-                              <ParticipantOptionIcon kind={iconKind} className="w-5 h-5 shrink-0" />
-                              <span className="text-sm sm:text-[15px] font-medium truncate">{opt}</span>
-                            </span>
-                            <div
-                              className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ml-2 transition-colors ${
-                                isSelected
-                                  ? 'border-white bg-white text-[#4B5E26]'
-                                  : 'border-[#C8B8A6] bg-white'
-                              }`}
-                            >
-                              {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {participantErrors.participationHistory && (
-                      <p className="text-xs text-[#D32F2F] mt-1 pl-2">
-                        {participantErrors.participationHistory}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Group 2: ความถี่ในปีนี้ */}
-                  <div>
-                    <label className="flex items-center gap-2 text-sm sm:text-base font-bold text-[#3E2723] mb-1.5">
-                      <ParticipantOptionIcon kind="calendar-rays" className="w-6 h-6 shrink-0" />
-                      <span>
-                        ในปีนี้ ท่านมาร่วมกิจกรรมแล้วกี่ครั้ง <span className="text-[#D32F2F]">*</span>
-                      </span>
-                    </label>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {(settings.visitFrequencyOptions && settings.visitFrequencyOptions.length > 0
-                        ? settings.visitFrequencyOptions
-                        : ['ครั้งที่ 1', 'ครั้งที่ 2', 'ครั้งที่ 3', 'ครั้งที่ 4', 'ครั้งที่ 5', 'มากกว่า 5 ครั้ง']
-                      ).map((opt) => {
-                        const isSelected = participant.visitFrequencyThisYear === opt;
-                        return (
-                          <button
-                            type="button"
-                            key={opt}
-                            onClick={() => {
-                              setParticipant((p) => ({ ...p, visitFrequencyThisYear: opt }));
-                              if (participantErrors.visitFrequencyThisYear) {
-                                setParticipantErrors((p) => ({ ...p, visitFrequencyThisYear: undefined }));
-                              }
-                            }}
-                            className={`flex items-center justify-between px-3.5 py-2 rounded-full border text-left transition-all cursor-pointer ${
-                              isSelected
-                                ? 'bg-[#4B5E26] border-[#4B5E26] text-white font-semibold shadow-sm'
-                                : participantErrors.visitFrequencyThisYear
-                                  ? 'bg-[#FFFDF9] border-red-300 text-[#4E342E] hover:bg-[#F8F2E7] shadow-[0_3px_10px_rgba(92,58,33,0.04)]'
-                                  : 'bg-[#FFFDF9] border-[#E5D8C8] text-[#3A2D26] hover:bg-[#F8F2E7] hover:border-[#7D502E] shadow-[0_3px_10px_rgba(92,58,33,0.04)]'
-                            }`}
-                          >
-                            <span className="text-xs sm:text-sm font-medium whitespace-nowrap">{opt}</span>
-                            <div
-                              className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ml-2 transition-colors ${
-                                isSelected
-                                  ? 'border-white bg-white text-[#4B5E26]'
-                                  : 'border-[#C8B8A6] bg-white'
-                              }`}
-                            >
-                              {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                    {participantErrors.visitFrequencyThisYear && (
-                      <p className="text-xs text-[#D32F2F] mt-1 pl-2">
-                        {participantErrors.visitFrequencyThisYear}
-                      </p>
-                    )}
-                  </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-stretch text-left">
+              {/* Column 1: การร่วมกิจกรรม */}
+              <div
+                className={`rounded-[24px] border-[1.5px] p-4 sm:p-5 flex flex-col justify-start transition-colors shadow-[0_4px_16px_rgba(92,58,33,0.04)] ${
+                  participantErrors.participationHistory
+                    ? 'border-[#D32F2F]/70 bg-[#FFF8F7]'
+                    : 'border-[#7D502E]/75 bg-[#FFFDF9]'
+                }`}
+              >
+                <label className="flex items-center gap-2 text-sm sm:text-[15px] font-bold text-[#3E2723] mb-3">
+                  <ParticipantOptionIcon kind="users-badge" className="w-6 h-5 shrink-0" />
+                  <span>
+                    การร่วมกิจกรรม <span className="text-[#D32F2F]">*</span>
+                  </span>
+                </label>
+                <div className="flex flex-col gap-2.5">
+                  {(settings.participationHistoryOptions && settings.participationHistoryOptions.length > 0
+                    ? settings.participationHistoryOptions
+                    : ['เคยเข้าร่วมกิจกรรมในปีที่ผ่านมา', 'ปีนี้เป็นครั้งแรก']
+                  ).map((opt, idx) => {
+                    const isSelected = participant.participationHistory === opt;
+                    const iconKind =
+                      opt.includes('ครั้งแรก') || opt.includes('ยังไม่เคย')
+                        ? 'book-sprout'
+                        : idx === 1 && !opt.includes('เคยเข้าร่วม')
+                          ? 'book-sprout'
+                          : 'book-trio';
+                    return (
+                      <button
+                        type="button"
+                        key={opt}
+                        onClick={() => {
+                          setParticipant((p) => ({ ...p, participationHistory: opt }));
+                          if (participantErrors.participationHistory) {
+                            setParticipantErrors((p) => ({ ...p, participationHistory: undefined }));
+                          }
+                        }}
+                        className={`w-full flex items-center justify-between px-4 py-3 rounded-full border text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#4B5E26] border-[#4B5E26] text-white font-semibold shadow-sm'
+                            : participantErrors.participationHistory
+                              ? 'bg-white border-red-300 text-[#4E342E] hover:bg-[#F8F2E7] shadow-[0_2px_8px_rgba(92,58,33,0.05)]'
+                              : 'bg-white border-[#E5D8C8] text-[#3A2D26] hover:bg-[#F8F2E7] hover:border-[#7D502E] shadow-[0_2px_8px_rgba(92,58,33,0.05)]'
+                        }`}
+                      >
+                        <span className="flex items-center gap-2.5 min-w-0">
+                          <ParticipantOptionIcon kind={iconKind} className="w-5 h-5 shrink-0" />
+                          <span className="text-sm font-medium leading-snug">{opt}</span>
+                        </span>
+                        <div
+                          className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ml-2 transition-colors ${
+                            isSelected
+                              ? 'border-white bg-white text-[#4B5E26]'
+                              : 'border-[#BFA992] bg-white'
+                          }`}
+                        >
+                          {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
-
-                {/* Cute Green Book Mascot holding Pencil & Checklist on Right */}
-                <ParticipantBookMascotIllustration className="hidden md:block md:w-36 lg:w-40 md:absolute md:right-0 lg:right-2 md:top-1/2 md:-translate-y-1/2 pointer-events-none drop-shadow-xs" />
+                {participantErrors.participationHistory && (
+                  <p className="text-xs text-[#D32F2F] mt-2 pl-2">
+                    {participantErrors.participationHistory}
+                  </p>
+                )}
               </div>
 
-              {/* Group 3: กลุ่มสมาชิก */}
-              <div>
-                <label className="flex items-center gap-2 text-sm sm:text-base font-bold text-[#3E2723] mb-1.5">
+              {/* Column 2: ความถี่ในปีนี้ */}
+              <div
+                className={`rounded-[24px] border-[1.5px] p-4 sm:p-5 flex flex-col justify-start transition-colors shadow-[0_4px_16px_rgba(92,58,33,0.04)] ${
+                  participantErrors.visitFrequencyThisYear
+                    ? 'border-[#D32F2F]/70 bg-[#FFF8F7]'
+                    : 'border-[#7D502E]/75 bg-[#FFFDF9]'
+                }`}
+              >
+                <label className="flex items-center gap-2 text-sm sm:text-[15px] font-bold text-[#3E2723] mb-3">
+                  <ParticipantOptionIcon kind="calendar-rays" className="w-6 h-6 shrink-0" />
+                  <span className="leading-snug">
+                    ในปีนี้ ท่านมาร่วมกิจกรรมแล้วกี่ครั้ง <span className="text-[#D32F2F]">*</span>
+                  </span>
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {(settings.visitFrequencyOptions && settings.visitFrequencyOptions.length > 0
+                    ? settings.visitFrequencyOptions
+                    : ['ครั้งที่ 1', 'ครั้งที่ 2', 'ครั้งที่ 3', 'ครั้งที่ 4', 'ครั้งที่ 5', 'มากกว่า 5 ครั้ง']
+                  ).map((opt) => {
+                    const isSelected = participant.visitFrequencyThisYear === opt;
+                    return (
+                      <button
+                        type="button"
+                        key={opt}
+                        onClick={() => {
+                          setParticipant((p) => ({ ...p, visitFrequencyThisYear: opt }));
+                          if (participantErrors.visitFrequencyThisYear) {
+                            setParticipantErrors((p) => ({ ...p, visitFrequencyThisYear: undefined }));
+                          }
+                        }}
+                        className={`flex items-center justify-between px-3 py-2 rounded-full border text-left transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#4B5E26] border-[#4B5E26] text-white font-semibold shadow-sm'
+                            : participantErrors.visitFrequencyThisYear
+                              ? 'bg-white border-red-300 text-[#4E342E] hover:bg-[#F8F2E7] shadow-[0_2px_8px_rgba(92,58,33,0.05)]'
+                              : 'bg-white border-[#E5D8C8] text-[#3A2D26] hover:bg-[#F8F2E7] hover:border-[#7D502E] shadow-[0_2px_8px_rgba(92,58,33,0.05)]'
+                        }`}
+                      >
+                        <span className="text-xs sm:text-[13px] font-medium whitespace-nowrap">{opt}</span>
+                        <div
+                          className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ml-1.5 transition-colors ${
+                            isSelected
+                              ? 'border-white bg-white text-[#4B5E26]'
+                              : 'border-[#BFA992] bg-white'
+                          }`}
+                        >
+                          {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                {participantErrors.visitFrequencyThisYear && (
+                  <p className="text-xs text-[#D32F2F] mt-2 pl-2">
+                    {participantErrors.visitFrequencyThisYear}
+                  </p>
+                )}
+              </div>
+
+              {/* Column 3: กลุ่มสมาชิก */}
+              <div
+                className={`rounded-[24px] border-[1.5px] p-4 sm:p-5 flex flex-col justify-start transition-colors shadow-[0_4px_16px_rgba(92,58,33,0.04)] ${
+                  participantErrors.memberType
+                    ? 'border-[#D32F2F]/70 bg-[#FFF8F7]'
+                    : 'border-[#7D502E]/75 bg-[#FFFDF9]'
+                }`}
+              >
+                <label className="flex items-center gap-2 text-sm sm:text-[15px] font-bold text-[#3E2723] mb-3">
                   <ParticipantOptionIcon kind="users-badge" className="w-6 h-5 shrink-0" />
                   <span>
                     กลุ่มสมาชิก <span className="text-[#D32F2F]">*</span>
                   </span>
                 </label>
-                <div className="flex flex-wrap items-center gap-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   {(settings.memberTypes && settings.memberTypes.length > 0
                     ? settings.memberTypes
                     : [
@@ -1338,7 +1347,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
                         'CMU ศิษย์เก่า',
                         'บุคคลทั่วไป/นักเรียน',
                       ]
-                  ).map((type) => {
+                  ).map((type, idx) => {
                     const isSelected = participant.memberType === type;
                     const memberIconKind = type.includes('นักศึกษา')
                       ? 'student-cap'
@@ -1347,6 +1356,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
                         : type.includes('ศิษย์เก่า')
                           ? 'alumni-building'
                           : 'public-people';
+                    const isCompactPair = idx < 2;
                     return (
                       <button
                         type="button"
@@ -1357,23 +1367,23 @@ export const KioskView: React.FC<KioskViewProps> = ({
                             setParticipantErrors((p) => ({ ...p, memberType: undefined }));
                           }
                         }}
-                        className={`flex-auto flex items-center justify-between px-3.5 py-2.5 rounded-full border text-left transition-all cursor-pointer ${
+                        className={`${isCompactPair ? 'sm:col-span-1 px-3 py-2.5' : 'sm:col-span-2 px-4 py-2.5'} flex items-center justify-between rounded-full border text-left transition-all cursor-pointer ${
                           isSelected
                             ? 'bg-[#4B5E26] border-[#4B5E26] text-white font-semibold shadow-sm'
                             : participantErrors.memberType
-                              ? 'bg-[#FFFDF9] border-red-300 text-[#4E342E] hover:bg-[#F8F2E7] shadow-[0_3px_10px_rgba(92,58,33,0.04)]'
-                              : 'bg-[#FFFDF9] border-[#E5D8C8] text-[#3A2D26] hover:bg-[#F8F2E7] hover:border-[#7D502E] shadow-[0_3px_10px_rgba(92,58,33,0.04)]'
+                              ? 'bg-white border-red-300 text-[#4E342E] hover:bg-[#F8F2E7] shadow-[0_2px_8px_rgba(92,58,33,0.05)]'
+                              : 'bg-white border-[#E5D8C8] text-[#3A2D26] hover:bg-[#F8F2E7] hover:border-[#7D502E] shadow-[0_2px_8px_rgba(92,58,33,0.05)]'
                         }`}
                       >
-                        <span className="flex items-center gap-2 min-w-0">
-                          <ParticipantOptionIcon kind={memberIconKind} className="w-5 h-5 shrink-0" />
-                          <span className="text-xs sm:text-sm font-medium whitespace-nowrap">{type}</span>
+                        <span className="flex items-center gap-1.5 min-w-0">
+                          <ParticipantOptionIcon kind={memberIconKind} className="w-4 h-4 sm:w-5 sm:h-5 shrink-0" />
+                          <span className="text-xs sm:text-[13px] font-medium whitespace-nowrap truncate">{type}</span>
                         </span>
                         <div
-                          className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ml-2 transition-colors ${
+                          className={`w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0 ml-1.5 transition-colors ${
                             isSelected
                               ? 'border-white bg-white text-[#4B5E26]'
-                              : 'border-[#C8B8A6] bg-white'
+                              : 'border-[#BFA992] bg-white'
                           }`}
                         >
                           {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
@@ -1383,7 +1393,7 @@ export const KioskView: React.FC<KioskViewProps> = ({
                   })}
                 </div>
                 {participantErrors.memberType && (
-                  <p className="text-xs text-[#D32F2F] mt-1.5 pl-2">{participantErrors.memberType}</p>
+                  <p className="text-xs text-[#D32F2F] mt-2 pl-2">{participantErrors.memberType}</p>
                 )}
               </div>
             </div>
